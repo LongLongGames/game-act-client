@@ -57,9 +57,19 @@
 ## 开发计划（与服务器对齐）
 
 ### Phase 0 – 骨架（1~2 周）
-- [ ] 工程初始化（URP、基础场景、登录流）
-- [ ] MP 登录 → JWT → 拉资料 / 存档
-- [ ] 版本检查接口对接
+- [x] 工程初始化（URP、基础场景、登录流）
+- [x] MP 登录 → JWT → 拉资料 / 存档
+- [x] 版本检查接口对接
+
+#### P0 联调说明
+
+1. 打开场景 `Assets/Scenes/Demo.unity`
+2. 在任意物体上挂 `GameBootstrap`（可选再挂 `GameLifetimeScope`）
+3. 先启动 MP（11080）与 game-act-server（13280）
+4. Play：版本检查 → 登录（MP official）→ 拉 `/api/v1/user/profile` → Home
+5. Token 持久化与 401 处理遵循 [ADR-0004](https://github.com/LongLongGames/.github/blob/main/docs/adr/0004-client-access-token-lifecycle.md)
+
+脚本入口：`Assets/Scripts/`（Network / Auth / Services / AppFlow / UI / Bootstrap / DI）
 
 ### Phase 1 – 联机基础（3~5 周）
 - [ ] Steamworks 接入（Lobby / 邀请 / P2P）
