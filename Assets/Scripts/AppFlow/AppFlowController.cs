@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using GameAct.Auth;
 using GameAct.Network;
 using GameAct.Services;
@@ -28,6 +29,7 @@ namespace GameAct.AppFlow
         readonly ILobbyView _lobby;
         readonly IRoomView _room;
         readonly ISettingsView _settings;
+        readonly ILoadingView _loading;
         readonly ISteamService _steam;
         readonly INetSession _net;
         readonly ApiConfig _config;
@@ -54,6 +56,7 @@ namespace GameAct.AppFlow
             ILobbyView lobby,
             IRoomView room,
             ISettingsView settings,
+            ILoadingView loading = null,
             ISteamService steam = null,
             INetSession net = null,
             ApiConfig config = null)
@@ -67,6 +70,7 @@ namespace GameAct.AppFlow
             _lobby = lobby;
             _room = room;
             _settings = settings;
+            _loading = loading;
             _steam = steam;
             _net = net;
             _config = config ?? new ApiConfig();
@@ -79,7 +83,7 @@ namespace GameAct.AppFlow
             _login.OnDevLoginSubmitted += HandleDevLoginSubmitted;
             _login.OnSteamEnterClicked += HandleSteamEnterClicked;
 
-            _mainMenu.OnSinglePlayerClicked += () => _mainMenu.SetStatus("单人模式：占位");
+            _mainMenu.OnSinglePlayerClicked += () => StartGameAsync("Map1").Forget();
             _mainMenu.OnMultiplayerClicked += HandleMultiplayer;
             _mainMenu.OnAchievementsClicked += () => _mainMenu.SetStatus("成就：占位（独立界面后续接）");
             _mainMenu.OnSettingsClicked += HandleOpenSettings;
@@ -92,7 +96,7 @@ namespace GameAct.AppFlow
 
             _room.OnLeaveClicked += HandleRoomLeave;
             _room.OnInviteClicked += HandleInvite;
-            _room.OnStartClicked += () => _room.SetStatus("开始游戏：占位");
+            _room.OnStartClicked += () => StartGameAsync("Map1").Forget();
 
             _settings.OnBackClicked += HandleSettingsBack;
             _settings.OnDisplayDefaultsClicked += HandleDisplayDefaults;
@@ -130,6 +134,7 @@ namespace GameAct.AppFlow
             _lobby.Hide();
             _room.Hide();
             _settings.Hide();
+            _loading?.Hide();
             _mainMenu.Show();
         }
 
@@ -139,6 +144,7 @@ namespace GameAct.AppFlow
             _mainMenu.Hide();
             _room.Hide();
             _settings.Hide();
+            _loading?.Hide();
             _lobby.Show();
         }
 
@@ -148,6 +154,7 @@ namespace GameAct.AppFlow
             _mainMenu.Hide();
             _lobby.Hide();
             _settings.Hide();
+            _loading?.Hide();
             _room.Show();
         }
 
@@ -157,6 +164,7 @@ namespace GameAct.AppFlow
             _mainMenu.Hide();
             _lobby.Hide();
             _room.Hide();
+            _loading?.Hide();
             _settings.Show();
         }
 
@@ -166,7 +174,56 @@ namespace GameAct.AppFlow
             _lobby.Hide();
             _room.Hide();
             _settings.Hide();
+            _loading?.Hide();
             _login.Show();
+        }
+
+        void ShowOnlyLoading()
+        {
+            _login.Hide();
+            _mainMenu.Hide();
+            _lobby.Hide();
+            _room.Hide();
+            _settings.Hide();
+            _loading?.Show();
+        }
+
+        /// <summary>
+        /// 开始游戏：显示 Loading，异步 Additive 加载指定场景（默认 Map1）。
+        /// </summary>
+        async UniTaskVoid StartGameAsync(string sceneName = "Map1")
+        {
+            ShowOnlyLoading();
+            _loading?.SetStatus($"正在加载 {sceneName}…");
+            _loading?.SetProgress(0f);
+
+            // 确保场景已加入 Build Settings；若未加入则尝试按名加载
+            var op = SceneManager.LoadSceneAsync(sceneName, LoadSceneMode.Additive);
+            if (op == null)
+            {
+                _loading?.SetStatus($"加载失败：场景 {sceneName} 不存在或未加入 Build Settings");
+                Debug.LogError($"[AppFlow] LoadSceneAsync failed: {sceneName}");
+                await UniTask.Delay(2000);
+                ShowOnlyMainMenu();
+                _mainMenu.SetStatus($"加载失败: {sceneName}");
+                return;
+            }
+
+            op.allowSceneActivation = true;
+            while (!op.isDone)
+            {
+                // Unity 进度 0~0.9 为加载，0.9~1 为激活
+                float p = Mathf.Clamp01(op.progress / 0.9f);
+                _loading?.SetProgress(p);
+                _loading?.SetStatus($"加载中… {(int)(p * 100)}%");
+                await UniTask.Yield();
+            }
+
+            _loading?.SetProgress(1f);
+            _loading?.SetStatus("加载完成");
+            await UniTask.Delay(300);
+            _loading?.Hide();
+            Debug.Log($"[AppFlow] Additive loaded: {sceneName}");
         }
 
         // ─── Boot / Login / Home ────────────────────────────
