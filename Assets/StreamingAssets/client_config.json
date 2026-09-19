@@ -1,7 +1,7 @@
 {
-  "mpBaseUrl": "http://localhost:11080",
-  "gameBaseUrl": "http://localhost:13280",
-  "abUpdateUrl": "http://localhost/AssetBundles/",
+  "mpBaseUrl": "http://192.168.1.123:11080",
+  "gameBaseUrl": "http://192.168.1.123:13280",
+  "abUpdateUrl": "http://192.168.1.123/AssetBundles/",
   "channel": "official",
   "region": "cn",
   "platform": "pc",
