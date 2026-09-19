@@ -7,12 +7,13 @@ using GameAct.UI;
 using GameAct.Steam;
 using GameAct.Net;
 using GameAct.Net.LiteNet;
+using GameAct.Network;
 
 namespace GameAct.Bootstrap
 {
     /// <summary>
     /// 场景入口：创建 Canvas + 各独立 UI，启动 AppFlow。
-    /// 主菜单 / 大厅 / 房间 / 设置 各自 Build，互不嵌套。
+    /// 配置统一走 ClientConfigLoader（StreamingAssets/client_config.json）。
     /// </summary>
     public class GameBootstrap : MonoBehaviour
     {
@@ -49,8 +50,10 @@ namespace GameAct.Bootstrap
             var settings = canvas.gameObject.AddComponent<RuntimeSettingsView>();
             settings.Build(root);
 
-            var config = new Network.ApiConfig();
-            var http = new Network.HttpClientService();
+            var config = ClientConfigLoader.Load();
+            Debug.Log($"[Bootstrap] MP={config.MpBaseUrl} Game={config.GameBaseUrl} AB={config.AbUpdateUrl}");
+
+            var http = new HttpClientService();
             var tokenStore = new Services.TokenStore();
             var auth = new Auth.AuthService(http, config, tokenStore);
             var version = new Services.VersionService(http, config);

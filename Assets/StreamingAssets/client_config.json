@@ -1,0 +1,12 @@
+{
+  "mpBaseUrl": "http://localhost:11080",
+  "gameBaseUrl": "http://localhost:13280",
+  "abUpdateUrl": "http://localhost/AssetBundles/",
+  "channel": "official",
+  "region": "cn",
+  "platform": "pc",
+  "gameId": "act",
+  "appId": "test_app",
+  "clientVersionCode": 1,
+  "resourceVersion": "0.0.1"
+}
