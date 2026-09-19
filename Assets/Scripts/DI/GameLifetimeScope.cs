@@ -9,6 +9,7 @@ using GameAct.UI;
 using GameAct.Steam;
 using GameAct.Net;
 using GameAct.Net.LiteNet;
+using GameAct.Lobby;
 
 namespace GameAct.DI
 {
@@ -49,6 +50,7 @@ namespace GameAct.DI
 
             builder.Register<ISteamService, SteamService>(Lifetime.Singleton);
             builder.Register<INetSession, LiteNetSession>(Lifetime.Singleton);
+            builder.Register<ILobbyService, LobbyService>(Lifetime.Singleton);
 
             builder.Register<IAppFlow, AppFlowController>(Lifetime.Singleton);
         }

@@ -7,6 +7,7 @@ using GameAct.UI;
 using GameAct.Steam;
 using GameAct.Net;
 using GameAct.Net.LiteNet;
+using GameAct.Lobby;
 
 namespace GameAct.Bootstrap
 {
@@ -69,13 +70,14 @@ namespace GameAct.Bootstrap
 
             var steam = new SteamService();
             var net = new LiteNetSession();
+            var lobby = new LobbyService(http, config);
 
             var runners = new GameObject("P1_Runners");
             DontDestroyOnLoad(runners);
             runners.AddComponent<SteamRunner>().Bind(steam);
             runners.AddComponent<NetRunner>().Bind(net);
 
-            var flow = new AppFlowController(version, auth, player, http, login, home, steam, net);
+            var flow = new AppFlowController(version, auth, player, http, login, home, steam, net, config, lobby);
             flow.StartAsync().Forget();
         }
 

@@ -7,18 +7,17 @@ namespace GameAct.Auth
     {
         bool IsLoggedIn { get; }
 
+        /// <summary>开发：官方用户名密码。</summary>
         UniTask<(bool ok, string error)> LoginAsync(string username, string password, CancellationToken ct = default);
 
-        /// <summary>从本地恢复 Token 到内存（不校验有效性）。</summary>
-        void TryRestoreToken();
-
         /// <summary>
-        /// 有本地 Token 时向服务端校验是否仍有效。
-        /// 有效返回 true；401/无效会 Logout 并返回 false。
-        /// 网络错误时不强制登出，返回 false 让流程走登录更安全。
+        /// 正式：Steam 登录/静默注册。
+        /// MP provider=steam，payload 带 steam_id + session_ticket。
         /// </summary>
-        UniTask<bool> ValidateSessionAsync(CancellationToken ct = default);
+        UniTask<(bool ok, string error)> LoginWithSteamAsync(ulong steamId, string sessionTicketHex, CancellationToken ct = default);
 
+        void TryRestoreToken();
+        UniTask<bool> ValidateSessionAsync(CancellationToken ct = default);
         void Logout();
     }
 }

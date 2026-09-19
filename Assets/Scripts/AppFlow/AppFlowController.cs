@@ -12,9 +12,8 @@ using GameAct.Net;
 namespace GameAct.AppFlow
 {
     /// <summary>
-    /// 全局流程：CheckUpdate →（校验 Token）→ Login / Home
-    /// 401：HTTP 层触发 → 强制登出回 Login。符合 ADR-0004。
-    /// P1：Home 挂 Steam Lobby + LiteNet Host/Join。
+    /// Steam 渠道多人：只走 Steam Lobby（创建/列表/加入/邀请）。
+    /// 与官服 game-lobby / Dedicated ServerList 无关。
     /// </summary>
     public class AppFlowController : IAppFlow
     {
@@ -28,8 +27,10 @@ namespace GameAct.AppFlow
         readonly IHomeView _homeView;
         readonly ISteamService _steam;
         readonly INetSession _net;
+        readonly ApiConfig _config;
 
         bool _unauthorizedHandling;
+        bool _isRoomHost;
 
         public AppFlowController(
             IVersionService version,
@@ -39,7 +40,9 @@ namespace GameAct.AppFlow
             ILoginView loginView,
             IHomeView homeView,
             ISteamService steam = null,
-            INetSession net = null)
+            INetSession net = null,
+            ApiConfig config = null,
+            object unusedLobby = null) // 保留参数兼容旧 Bootstrap，忽略
         {
             _version = version;
             _auth = auth;
@@ -49,44 +52,44 @@ namespace GameAct.AppFlow
             _homeView = homeView;
             _steam = steam;
             _net = net;
+            _config = config ?? new ApiConfig();
         }
 
         public async UniTask StartAsync(CancellationToken ct = default)
         {
             _http.Unauthorized += OnUnauthorized;
-            _loginView.OnLoginSubmitted += HandleLoginSubmitted;
-            _homeView.OnLogoutClicked += HandleLogoutClicked;
-            _homeView.OnCreateLobbyClicked += HandleCreateLobby;
-            _homeView.OnInviteFriendsClicked += HandleInviteFriends;
-            _homeView.OnStartHostClicked += HandleStartHost;
-            _homeView.OnConnectLocalClicked += HandleConnectLocal;
-            _homeView.OnDisconnectNetClicked += HandleDisconnectNet;
+            _loginView.OnDevLoginSubmitted += HandleDevLoginSubmitted;
+            _loginView.OnSteamEnterClicked += HandleSteamEnterClicked;
+
+            _homeView.OnSinglePlayerClicked += () => _homeView.SetStatus("单人模式：占位");
+            _homeView.OnMultiplayerClicked += HandleMultiplayer;
+            _homeView.OnAchievementsClicked += () => _homeView.SetStatus("成就：占位");
+            _homeView.OnSettingsClicked += () => _homeView.SetStatus("设置：占位");
+            _homeView.OnExitClicked += HandleExit;
+
+            _homeView.OnServerListBackClicked += HandleServerListBack;
+            _homeView.OnRefreshServerListClicked += () => HandleRefreshServerList().Forget();
+            _homeView.OnCreateRoomClicked += () => HandleCreateRoom().Forget();
+            _homeView.OnInviteClicked += HandleInvite;
+            _homeView.OnJoinRoomClicked += id => HandleJoinRoom(id).Forget();
+
+            _homeView.OnRoomLeaveClicked += HandleRoomLeave;
+            _homeView.OnRoomInviteClicked += HandleInvite;
+            _homeView.OnRoomStartClicked += () => _homeView.SetRoomWaitingStatus("开始游戏：占位");
 
             if (_steam != null)
             {
-                _steam.OnLobbyCreated += id =>
+                _steam.OnSteamError += msg =>
                 {
-                    _homeView.SetLobbyId(id);
-                    _homeView.SetSteamStatus($"Lobby 已创建 members={_steam.LobbyMemberCount}");
+                    _homeView.SetServerListStatus(msg);
+                    _homeView.SetRoomWaitingStatus(msg);
                 };
-                _steam.OnLobbyEntered += id =>
-                {
-                    _homeView.SetLobbyId(id);
-                    _homeView.SetSteamStatus($"已进入 Lobby members={_steam.LobbyMemberCount}");
-                };
-                _steam.OnSteamError += msg => _homeView.SetSteamStatus(msg);
-            }
-
-            if (_net != null)
-            {
-                _net.OnLog += msg => _homeView.SetNetStatus(msg);
-                _net.OnConnected += () => _homeView.SetNetStatus(_net.StatusText);
-                _net.OnDisconnected += () => _homeView.SetNetStatus(_net.StatusText);
+                _steam.OnLobbyMembersChanged += RefreshWaitingMembers;
+                _steam.OnLobbyEntered += _ => RefreshWaitingMembers();
             }
 
             InitSteam();
-
-            Debug.Log("[AppFlow] Start");
+            Debug.Log("[AppFlow] Start (Steam Lobby only for MP)");
             await GotoAsync(AppState.CheckUpdate, ct);
         }
 
@@ -94,18 +97,13 @@ namespace GameAct.AppFlow
         {
             if (_steam == null)
             {
-                _homeView.SetSteamStatus("未注入 SteamService");
+                _loginView.SetSteamMode(false, null);
                 return;
             }
-
             if (_steam.Init())
-            {
-                _homeView.SetSteamStatus($"OK  {_steam.PersonaName} ({_steam.SteamId})");
-            }
+                _loginView.SetSteamMode(true, _steam.PersonaName);
             else
-            {
-                _homeView.SetSteamStatus("未就绪（需启动 Steam 客户端）");
-            }
+                _loginView.SetSteamMode(false, null);
         }
 
         void OnUnauthorized()
@@ -113,9 +111,7 @@ namespace GameAct.AppFlow
             if (_unauthorizedHandling) return;
             if (State == AppState.Login || State == AppState.Boot || State == AppState.CheckUpdate)
                 return;
-
             _unauthorizedHandling = true;
-            Debug.LogWarning("[AppFlow] 401 → force Logout + Login");
             _auth.Logout();
             GotoAsync(AppState.Login).ContinueWith(() => { _unauthorizedHandling = false; }).Forget();
         }
@@ -124,7 +120,6 @@ namespace GameAct.AppFlow
         {
             State = next;
             Debug.Log($"[AppFlow] → {next}");
-
             switch (next)
             {
                 case AppState.CheckUpdate:
@@ -132,8 +127,14 @@ namespace GameAct.AppFlow
                     break;
                 case AppState.Login:
                     _homeView.Hide();
+                    if (_steam != null && _steam.IsInitialized)
+                        _loginView.SetSteamMode(true, _steam.PersonaName);
+                    else
+                        _loginView.SetSteamMode(false, null);
                     _loginView.Show();
-                    _loginView.SetStatus("请登录");
+                    _loginView.SetStatus(_steam != null && _steam.IsInitialized
+                        ? "点击「进入游戏」"
+                        : "Steam 未就绪，可使用开发登录");
                     _loginView.SetInteractable(true);
                     break;
                 case AppState.Home:
@@ -148,14 +149,11 @@ namespace GameAct.AppFlow
             try
             {
                 var (ok, resp, msg) = await _version.CheckVersionAsync(ct);
-                if (!ok)
-                    Debug.LogWarning("[AppFlow] version check failed: " + msg);
-                else if (resp != null && resp.force_update)
-                    Debug.LogWarning("[AppFlow] force update required, latest=" + resp.latest_client_version);
+                if (!ok) Debug.LogWarning("[AppFlow] version check failed: " + msg);
             }
             catch (Exception e)
             {
-                Debug.LogWarning("[AppFlow] version check exception: " + e.Message);
+                Debug.LogWarning("[AppFlow] version check: " + e.Message);
             }
 
             _auth.TryRestoreToken();
@@ -164,108 +162,224 @@ namespace GameAct.AppFlow
                 await GotoAsync(AppState.Login, ct);
                 return;
             }
-
             var valid = await _auth.ValidateSessionAsync(ct);
-            if (valid)
-                await GotoAsync(AppState.Home, ct);
-            else
-                await GotoAsync(AppState.Login, ct);
+            await GotoAsync(valid ? AppState.Home : AppState.Login, ct);
         }
 
-        async void HandleLoginSubmitted(string username, string password)
+        async void HandleSteamEnterClicked()
+        {
+            if (_steam == null || !_steam.IsInitialized)
+            {
+                _loginView.SetStatus("Steam 未初始化");
+                return;
+            }
+            _loginView.SetInteractable(false);
+            _loginView.SetStatus("Steam 登录中…");
+            try
+            {
+                var ticket = _steam.GetAuthSessionTicketHex();
+                var (ok, err) = await _auth.LoginWithSteamAsync(_steam.SteamId, ticket);
+                if (!ok)
+                {
+                    _loginView.SetStatus(err);
+                    _loginView.SetInteractable(true);
+                    return;
+                }
+                await GotoAsync(AppState.Home);
+            }
+            catch (Exception e)
+            {
+                _loginView.SetStatus(e.Message);
+                _loginView.SetInteractable(true);
+            }
+        }
+
+        async void HandleDevLoginSubmitted(string username, string password)
         {
             _loginView.SetInteractable(false);
-            _loginView.SetStatus("登录中…");
+            _loginView.SetStatus("开发登录中…");
             try
             {
                 var (ok, err) = await _auth.LoginAsync(username, password);
                 if (!ok)
                 {
-                    _loginView.SetStatus(FormatLoginError(err));
+                    _loginView.SetStatus(err);
                     _loginView.SetInteractable(true);
                     return;
                 }
-
                 await GotoAsync(AppState.Home);
             }
             catch (Exception e)
             {
-                _loginView.SetStatus("登录异常: " + e.Message);
+                _loginView.SetStatus(e.Message);
                 _loginView.SetInteractable(true);
             }
         }
 
-        void HandleLogoutClicked()
-        {
-            _net?.Disconnect();
-            _steam?.LeaveLobby();
-            _auth.Logout();
-            GotoAsync(AppState.Login).Forget();
-        }
-
-        async void HandleCreateLobby()
+        void HandleMultiplayer()
         {
             if (_steam == null || !_steam.IsInitialized)
             {
-                _homeView.SetSteamStatus("Steam 未初始化");
+                _homeView.SetStatus("多人需要 Steam（P2P 房间走 Steam Lobby）");
                 return;
             }
-            _homeView.SetSteamStatus("创建 Lobby…");
-            var id = await _steam.CreateLobbyAsync(4);
-            if (id == 0)
-                _homeView.SetSteamStatus("创建失败");
+            _homeView.ShowRoomWaiting(false);
+            _homeView.ShowServerList(true);
+            _homeView.SetServerListStatus("拉取 Steam 房间列表…");
+            HandleRefreshServerList().Forget();
         }
 
-        void HandleInviteFriends()
+        void HandleServerListBack()
+        {
+            _homeView.ShowServerList(false);
+            _homeView.SetStatus("");
+        }
+
+        void HandleExit()
+        {
+            HandleRoomLeave();
+            _net?.Disconnect();
+            _auth.Logout();
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+            Application.Quit();
+#endif
+        }
+
+        async UniTask HandleRefreshServerList()
         {
             if (_steam == null || !_steam.IsInitialized)
             {
-                _homeView.SetSteamStatus("Steam 未初始化");
+                _homeView.SetRoomList(Array.Empty<RoomListItem>());
+                _homeView.SetServerListStatus("需要 Steam");
+                return;
+            }
+
+            _homeView.SetServerListStatus("刷新 Steam Lobby 列表…");
+            var items = await _steam.RequestLobbyListAsync();
+            _homeView.SetRoomList(items ?? Array.Empty<RoomListItem>());
+            int n = items?.Length ?? 0;
+            _homeView.SetServerListStatus(n == 0
+                ? "暂无公开房间 · 点击【创建】或等好友邀请"
+                : $"Steam 公开房间 {n} 个");
+        }
+
+        async UniTaskVoid HandleCreateRoom()
+        {
+            if (_steam == null || !_steam.IsInitialized)
+            {
+                _homeView.SetServerListStatus("需要 Steam");
+                return;
+            }
+
+            _homeView.SetServerListStatus("正在创建 Steam 房间…");
+            var name = (_steam.PersonaName ?? "玩家") + " 的房间";
+            var lobbyId = await _steam.CreateLobbyAsync(name, 4);
+            if (lobbyId == 0)
+            {
+                _homeView.SetServerListStatus("创建失败");
+                return;
+            }
+
+            _isRoomHost = true;
+            // 传输层本机 Host（同网调试）；正式应对接 Steam Networking
+            if (_net != null && !_net.IsConnected)
+                await _net.StartHostAsync(9050);
+
+            EnterRoomWaiting();
+        }
+
+        async UniTaskVoid HandleJoinRoom(string roomId)
+        {
+            if (_steam == null || !_steam.IsInitialized)
+            {
+                _homeView.SetServerListStatus("需要 Steam");
+                return;
+            }
+            if (!ulong.TryParse(roomId, out var lobbyId) || lobbyId == 0)
+            {
+                _homeView.SetServerListStatus("无效房间 ID");
+                return;
+            }
+
+            _homeView.SetServerListStatus("正在加入…");
+            var ok = await _steam.JoinLobbyAsync(lobbyId);
+            if (!ok)
+            {
+                _homeView.SetServerListStatus("加入失败");
+                return;
+            }
+
+            _isRoomHost = false;
+            // 正式：Steam P2P 连房主；同网调试可再补 Host 地址
+            EnterRoomWaiting();
+        }
+
+        void EnterRoomWaiting()
+        {
+            _homeView.ShowServerList(false);
+            _homeView.ShowRoomWaiting(true);
+            RefreshWaitingMembers();
+            _homeView.SetRoomWaitingStatus(_isRoomHost
+                ? "你是房主 · 等待其他玩家（Steam Lobby）"
+                : "已加入 · 等待房主开始");
+        }
+
+        void RefreshWaitingMembers()
+        {
+            if (_steam == null || _steam.CurrentLobbyId == 0) return;
+            var members = _steam.GetLobbyMemberNames();
+            var extra = $"人数 {_steam.LobbyMemberCount}/4";
+            var lines = new string[(members?.Length ?? 0) + 1];
+            if (members != null)
+                Array.Copy(members, lines, members.Length);
+            lines[lines.Length - 1] = extra;
+
+            _homeView.SetRoomWaitingInfo(
+                _steam.CurrentLobbyName,
+                _steam.CurrentLobbyId.ToString(),
+                lines,
+                _isRoomHost);
+        }
+
+        void HandleInvite()
+        {
+            if (_steam == null || !_steam.IsInitialized)
+            {
+                _homeView.SetServerListStatus("需要 Steam");
+                return;
+            }
+            if (_steam.CurrentLobbyId == 0)
+            {
+                _homeView.SetServerListStatus("请先【创建】房间再邀请");
+                _homeView.SetRoomWaitingStatus("请先在房间内再邀请");
                 return;
             }
             _steam.InviteFriendsOverlay();
-            _homeView.SetSteamStatus("已打开邀请 Overlay");
+            _homeView.SetRoomWaitingStatus("已打开 Steam 邀请");
+            _homeView.SetServerListStatus("已打开 Steam 邀请");
         }
 
-        async void HandleStartHost()
+        void HandleRoomLeave()
         {
-            if (_net == null)
-            {
-                _homeView.SetNetStatus("Net 未注入");
-                return;
-            }
-            _homeView.SetNetStatus("启动 Host…");
-            var ok = await _net.StartHostAsync(9050);
-            _homeView.SetNetStatus(ok ? _net.StatusText : "Host 失败");
-        }
-
-        async void HandleConnectLocal()
-        {
-            if (_net == null)
-            {
-                _homeView.SetNetStatus("Net 未注入");
-                return;
-            }
-            _homeView.SetNetStatus("连接 127.0.0.1:9050…");
-            var ok = await _net.ConnectAsync("127.0.0.1", 9050);
-            _homeView.SetNetStatus(ok ? _net.StatusText : "连接失败");
-        }
-
-        void HandleDisconnectNet()
-        {
+            _isRoomHost = false;
             _net?.Disconnect();
-            _homeView.SetNetStatus("已断开");
+            _steam?.LeaveLobby();
+            _homeView.ShowRoomWaiting(false);
+            _homeView.ShowServerList(true);
+            HandleRefreshServerList().Forget();
         }
 
         async UniTask EnterHomeAsync(CancellationToken ct)
         {
             _homeView.Show();
+            _homeView.ShowRoomWaiting(false);
+            _homeView.ShowServerList(false);
+            _homeView.SetVersions("v" + _config.ClientVersionCode, _config.ResourceVersion);
             _homeView.SetStatus("拉取资料中…");
-
             if (_steam != null && _steam.IsInitialized)
-                _homeView.SetSteamStatus($"OK  {_steam.PersonaName}");
-            if (_net != null)
-                _homeView.SetNetStatus(_net.StatusText);
+                _homeView.SetUserName(_steam.PersonaName);
 
             try
             {
@@ -277,24 +391,11 @@ namespace GameAct.AppFlow
                 }
                 _homeView.ShowProfile(profile);
             }
-            catch (UnauthorizedException)
-            {
-            }
+            catch (UnauthorizedException) { }
             catch (Exception e)
             {
                 _homeView.SetStatus("拉资料异常: " + e.Message);
             }
-        }
-
-        static string FormatLoginError(string err)
-        {
-            if (string.IsNullOrEmpty(err))
-                return "登录失败，请稍后重试。";
-            if (err.IndexOf("Cannot connect", StringComparison.OrdinalIgnoreCase) >= 0
-                || err.IndexOf("Connection refused", StringComparison.OrdinalIgnoreCase) >= 0
-                || err.IndexOf("Failed to connect", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "无法连接服务器，请确认 MP(11080) 与 game-act-server(13280) 已启动。\n\n详情：" + err;
-            return "登录失败：" + err;
         }
     }
 }

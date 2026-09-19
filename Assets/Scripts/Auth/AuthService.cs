@@ -8,9 +8,8 @@ using GameAct.Services;
 namespace GameAct.Auth
 {
     /// <summary>
-    /// 登录 / 会话校验 / 登出。严格遵守 ADR-0004：
-    /// - 禁止仅凭 PlayerPrefs 非空 token 当作已登录
-    /// - 401 → Logout
+    /// 登录 / 会话校验 / 登出。严格遵守 ADR-0004。
+    /// 正式：LoginWithSteamAsync；开发：LoginAsync 官方账号。
     /// </summary>
     public class AuthService : IAuthService
     {
@@ -27,7 +26,7 @@ namespace GameAct.Auth
             _tokenStore = tokenStore;
         }
 
-        public async UniTask<(bool ok, string error)> LoginAsync(string username, string password, CancellationToken ct = default)
+        public UniTask<(bool ok, string error)> LoginAsync(string username, string password, CancellationToken ct = default)
         {
             var body = new LoginRequest
             {
@@ -40,7 +39,30 @@ namespace GameAct.Auth
                     password = password
                 }
             };
+            return PostLoginAsync(body, ct);
+        }
 
+        public UniTask<(bool ok, string error)> LoginWithSteamAsync(ulong steamId, string sessionTicketHex, CancellationToken ct = default)
+        {
+            if (steamId == 0)
+                return UniTask.FromResult<(bool, string)>((false, "SteamId 无效"));
+
+            var body = new LoginRequest
+            {
+                provider = "steam",
+                app_id = _config.AppId,
+                device_id = SystemInfo.deviceUniqueIdentifier,
+                auth_payload = new LoginAuthPayload
+                {
+                    steam_id = steamId.ToString(),
+                    session_ticket = sessionTicketHex ?? ""
+                }
+            };
+            return PostLoginAsync(body, ct);
+        }
+
+        async UniTask<(bool ok, string error)> PostLoginAsync(LoginRequest body, CancellationToken ct)
+        {
             var json = JsonUtility.ToJson(body);
             var url = _config.MpBaseUrl + "/api/v1/auth/login";
 
@@ -53,6 +75,7 @@ namespace GameAct.Auth
 
                 _http.AccessToken = resp.access_token;
                 _tokenStore.SetAccessToken(resp.access_token);
+                Debug.Log($"[Auth] Login OK provider={body.provider}");
                 return (true, null);
             }
             catch (Exception e)
@@ -78,7 +101,6 @@ namespace GameAct.Auth
             if (string.IsNullOrEmpty(_http.AccessToken))
                 return false;
 
-            // 用游戏服 profile 做轻量鉴权校验（与后续 Home 拉取一致）
             var url = $"{_config.GameBaseUrl}/api/v1/user/profile?game_id={_config.GameId}";
             try
             {
@@ -94,7 +116,6 @@ namespace GameAct.Auth
             }
             catch (Exception e)
             {
-                // 网络/服务异常：不保留「假登录」进 Home
                 Debug.LogWarning("[Auth] ValidateSession failed: " + e.Message);
                 return false;
             }
