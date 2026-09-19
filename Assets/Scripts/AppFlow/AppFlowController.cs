@@ -30,6 +30,7 @@ namespace GameAct.AppFlow
         readonly IRoomView _room;
         readonly ISettingsView _settings;
         readonly ILoadingView _loading;
+        readonly IGameHudView _hud;
         readonly ISteamService _steam;
         readonly INetSession _net;
         readonly ApiConfig _config;
@@ -57,6 +58,7 @@ namespace GameAct.AppFlow
             IRoomView room,
             ISettingsView settings,
             ILoadingView loading = null,
+            IGameHudView hud = null,
             ISteamService steam = null,
             INetSession net = null,
             ApiConfig config = null)
@@ -71,6 +73,7 @@ namespace GameAct.AppFlow
             _room = room;
             _settings = settings;
             _loading = loading;
+            _hud = hud;
             _steam = steam;
             _net = net;
             _config = config ?? new ApiConfig();
@@ -97,6 +100,15 @@ namespace GameAct.AppFlow
             _room.OnLeaveClicked += HandleRoomLeave;
             _room.OnInviteClicked += HandleInvite;
             _room.OnStartClicked += () => StartGameAsync("Map1").Forget();
+
+            if (_hud != null)
+            {
+                _hud.OnBagClicked += () => _hud.SetStatus("背包：占位");
+                _hud.OnMailClicked += () => _hud.SetStatus("邮件：占位");
+                _hud.OnQuestClicked += () => _hud.SetStatus("任务：占位");
+                _hud.OnSkillClicked += () => _hud.SetStatus("技能：占位");
+                _hud.OnMapClicked += () => _hud.SetStatus("地图：占位");
+            }
 
             _settings.OnBackClicked += HandleSettingsBack;
             _settings.OnDisplayDefaultsClicked += HandleDisplayDefaults;
@@ -135,6 +147,7 @@ namespace GameAct.AppFlow
             _room.Hide();
             _settings.Hide();
             _loading?.Hide();
+            _hud?.Hide();
             _mainMenu.Show();
         }
 
@@ -145,6 +158,7 @@ namespace GameAct.AppFlow
             _room.Hide();
             _settings.Hide();
             _loading?.Hide();
+            _hud?.Hide();
             _lobby.Show();
         }
 
@@ -155,6 +169,7 @@ namespace GameAct.AppFlow
             _lobby.Hide();
             _settings.Hide();
             _loading?.Hide();
+            _hud?.Hide();
             _room.Show();
         }
 
@@ -165,6 +180,7 @@ namespace GameAct.AppFlow
             _lobby.Hide();
             _room.Hide();
             _loading?.Hide();
+            _hud?.Hide();
             _settings.Show();
         }
 
@@ -175,6 +191,7 @@ namespace GameAct.AppFlow
             _room.Hide();
             _settings.Hide();
             _loading?.Hide();
+            _hud?.Hide();
             _login.Show();
         }
 
@@ -185,6 +202,7 @@ namespace GameAct.AppFlow
             _lobby.Hide();
             _room.Hide();
             _settings.Hide();
+            _hud?.Hide();
             _loading?.Show();
         }
 
@@ -223,7 +241,27 @@ namespace GameAct.AppFlow
             _loading?.SetStatus("加载完成");
             await UniTask.Delay(300);
             _loading?.Hide();
+
+            // 进游戏：显示 HUD，关掉 Boot 相机/Listener（避免双 Camera / 双 AudioListener）
+            DisableBootCameraAndListener();
+            _hud?.Show();
+            _hud?.SetStatus("已进入 " + sceneName);
             Debug.Log($"[AppFlow] Additive loaded: {sceneName}");
+        }
+
+        void DisableBootCameraAndListener()
+        {
+            foreach (var cam in Camera.allCameras)
+            {
+                if (cam != null && cam.gameObject.scene.name == "Boot")
+                    cam.enabled = false;
+            }
+            var listeners = UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None);
+            foreach (var al in listeners)
+            {
+                if (al != null && al.gameObject.scene.name == "Boot")
+                    al.enabled = false;
+            }
         }
 
         // ─── Boot / Login / Home ────────────────────────────

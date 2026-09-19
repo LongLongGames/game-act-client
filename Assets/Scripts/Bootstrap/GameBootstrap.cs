@@ -53,6 +53,9 @@ namespace GameAct.Bootstrap
             var loading = canvas.gameObject.AddComponent<RuntimeLoadingView>();
             loading.Build(root);
 
+            var hud = canvas.gameObject.AddComponent<RuntimeGameHudView>();
+            hud.Build(root);
+
             var config = ClientConfigLoader.Load();
             Debug.Log($"[Bootstrap] MP={config.MpBaseUrl} Game={config.GameBaseUrl} AB={config.AbUpdateUrl}");
 
@@ -73,7 +76,7 @@ namespace GameAct.Bootstrap
             var flow = new AppFlowController(
                 version, auth, player, http,
                 login, mainMenu, lobby, room, settings,
-                loading, steam, net, config);
+                loading, hud, steam, net, config);
             flow.StartAsync().Forget();
         }
 
