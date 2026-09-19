@@ -4,6 +4,9 @@ using UnityEngine.UI;
 using VContainer;
 using GameAct.AppFlow;
 using GameAct.UI;
+using GameAct.Steam;
+using GameAct.Net;
+using GameAct.Net.LiteNet;
 
 namespace GameAct.Bootstrap
 {
@@ -22,13 +25,10 @@ namespace GameAct.Bootstrap
 
         async UniTaskVoid BootstrapAsync()
         {
-            // 等 VContainer 注入完成
             await UniTask.Yield();
 
             if (_appFlow == null)
             {
-                // 若未挂 LifetimeScope，走手动组装（方便无 DI 场景快速验证）
-                Debug.LogWarning("[Bootstrap] IAppFlow not injected, building manual graph");
                 ManualBootstrap();
                 return;
             }
@@ -39,12 +39,8 @@ namespace GameAct.Bootstrap
             var home = canvas.gameObject.AddComponent<RuntimeHomeView>();
             home.Build(canvas.transform);
 
-            // 通过反射把 view 注入到已存在的 AppFlow（DI 已注册但 view 是运行时创建）
-            // 更干净做法：把 view 也注册进 scope。这里为 P0 简单覆盖字段。
-            if (_appFlow is AppFlowController flow)
+            if (_appFlow is AppFlowController)
             {
-                // AppFlowController 已在构造时注入 view；若 DI 未提供 view 则需重建。
-                // 当前 DI 未注册 view，改为手动创建完整图：
                 ManualBootstrapWithViews(login, home);
                 return;
             }
@@ -70,7 +66,16 @@ namespace GameAct.Bootstrap
             var auth = new Auth.AuthService(http, config, tokenStore);
             var version = new Services.VersionService(http, config);
             var player = new Services.PlayerService(http, config);
-            var flow = new AppFlow.AppFlowController(version, auth, player, http, login, home);
+
+            var steam = new SteamService();
+            var net = new LiteNetSession();
+
+            var runners = new GameObject("P1_Runners");
+            DontDestroyOnLoad(runners);
+            runners.AddComponent<SteamRunner>().Bind(steam);
+            runners.AddComponent<NetRunner>().Bind(net);
+
+            var flow = new AppFlowController(version, auth, player, http, login, home, steam, net);
             flow.StartAsync().Forget();
         }
 

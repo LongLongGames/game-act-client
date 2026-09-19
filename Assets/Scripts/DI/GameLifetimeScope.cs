@@ -6,11 +6,15 @@ using GameAct.Auth;
 using GameAct.Services;
 using GameAct.AppFlow;
 using GameAct.UI;
+using GameAct.Steam;
+using GameAct.Net;
+using GameAct.Net.LiteNet;
 
 namespace GameAct.DI
 {
     /// <summary>
-    /// P0 根 LifetimeScope。挂在 Bootstrap 场景物体上。
+    /// P1 根 LifetimeScope。挂在 Bootstrap 场景物体上。
+    /// View 仍由 Runtime 创建后手动拼装（见 GameBootstrap）。
     /// </summary>
     public class GameLifetimeScope : LifetimeScope
     {
@@ -42,13 +46,14 @@ namespace GameAct.DI
             builder.Register<IAuthService, AuthService>(Lifetime.Singleton);
             builder.Register<IVersionService, VersionService>(Lifetime.Singleton);
             builder.Register<IPlayerService, PlayerService>(Lifetime.Singleton);
+
+            builder.Register<ISteamService, SteamService>(Lifetime.Singleton);
+            builder.Register<INetSession, LiteNetSession>(Lifetime.Singleton);
+
             builder.Register<IAppFlow, AppFlowController>(Lifetime.Singleton);
         }
     }
 
-    /// <summary>
-    /// 可选：在 Inspector 覆盖本地联调地址。
-    /// </summary>
     [System.Serializable]
     public class ApiConfigOverride
     {

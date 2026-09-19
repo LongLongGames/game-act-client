@@ -37,6 +37,10 @@ namespace GameAct.UI
             _pass = CreateInput(panelT, "密码", new Vector2(0, -20));
             _pass.contentType = InputField.ContentType.Password;
 
+            // 联调默认账号（启动即可测）
+            _user.text = "tester1";
+            _pass.text = "test1234";
+
             _btn = CreateButton(panelT, "登录", new Vector2(0, -90));
             _btn.onClick.AddListener(() =>
             {

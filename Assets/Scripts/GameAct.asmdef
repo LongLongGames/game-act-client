@@ -3,7 +3,9 @@
     "rootNamespace": "GameAct",
     "references": [
         "UniTask",
-        "VContainer"
+        "VContainer",
+        "LiteNetLib",
+        "com.rlabrecque.steamworks.net"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

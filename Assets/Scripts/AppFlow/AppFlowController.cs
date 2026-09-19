@@ -6,12 +6,15 @@ using GameAct.Auth;
 using GameAct.Network;
 using GameAct.Services;
 using GameAct.UI;
+using GameAct.Steam;
+using GameAct.Net;
 
 namespace GameAct.AppFlow
 {
     /// <summary>
     /// 全局流程：CheckUpdate →（校验 Token）→ Login / Home
     /// 401：HTTP 层触发 → 强制登出回 Login。符合 ADR-0004。
+    /// P1：Home 挂 Steam Lobby + LiteNet Host/Join。
     /// </summary>
     public class AppFlowController : IAppFlow
     {
@@ -23,6 +26,8 @@ namespace GameAct.AppFlow
         readonly IHttpClient _http;
         readonly ILoginView _loginView;
         readonly IHomeView _homeView;
+        readonly ISteamService _steam;
+        readonly INetSession _net;
 
         bool _unauthorizedHandling;
 
@@ -32,7 +37,9 @@ namespace GameAct.AppFlow
             IPlayerService player,
             IHttpClient http,
             ILoginView loginView,
-            IHomeView homeView)
+            IHomeView homeView,
+            ISteamService steam = null,
+            INetSession net = null)
         {
             _version = version;
             _auth = auth;
@@ -40,6 +47,8 @@ namespace GameAct.AppFlow
             _http = http;
             _loginView = loginView;
             _homeView = homeView;
+            _steam = steam;
+            _net = net;
         }
 
         public async UniTask StartAsync(CancellationToken ct = default)
@@ -47,9 +56,56 @@ namespace GameAct.AppFlow
             _http.Unauthorized += OnUnauthorized;
             _loginView.OnLoginSubmitted += HandleLoginSubmitted;
             _homeView.OnLogoutClicked += HandleLogoutClicked;
+            _homeView.OnCreateLobbyClicked += HandleCreateLobby;
+            _homeView.OnInviteFriendsClicked += HandleInviteFriends;
+            _homeView.OnStartHostClicked += HandleStartHost;
+            _homeView.OnConnectLocalClicked += HandleConnectLocal;
+            _homeView.OnDisconnectNetClicked += HandleDisconnectNet;
+
+            if (_steam != null)
+            {
+                _steam.OnLobbyCreated += id =>
+                {
+                    _homeView.SetLobbyId(id);
+                    _homeView.SetSteamStatus($"Lobby 已创建 members={_steam.LobbyMemberCount}");
+                };
+                _steam.OnLobbyEntered += id =>
+                {
+                    _homeView.SetLobbyId(id);
+                    _homeView.SetSteamStatus($"已进入 Lobby members={_steam.LobbyMemberCount}");
+                };
+                _steam.OnSteamError += msg => _homeView.SetSteamStatus(msg);
+            }
+
+            if (_net != null)
+            {
+                _net.OnLog += msg => _homeView.SetNetStatus(msg);
+                _net.OnConnected += () => _homeView.SetNetStatus(_net.StatusText);
+                _net.OnDisconnected += () => _homeView.SetNetStatus(_net.StatusText);
+            }
+
+            InitSteam();
 
             Debug.Log("[AppFlow] Start");
             await GotoAsync(AppState.CheckUpdate, ct);
+        }
+
+        void InitSteam()
+        {
+            if (_steam == null)
+            {
+                _homeView.SetSteamStatus("未注入 SteamService");
+                return;
+            }
+
+            if (_steam.Init())
+            {
+                _homeView.SetSteamStatus($"OK  {_steam.PersonaName} ({_steam.SteamId})");
+            }
+            else
+            {
+                _homeView.SetSteamStatus("未就绪（需启动 Steam 客户端）");
+            }
         }
 
         void OnUnauthorized()
@@ -78,43 +134,30 @@ namespace GameAct.AppFlow
                     _homeView.Hide();
                     _loginView.Show();
                     _loginView.SetStatus("请登录");
+                    _loginView.SetInteractable(true);
                     break;
                 case AppState.Home:
                     _loginView.Hide();
                     await EnterHomeAsync(ct);
-                    break;
-                case AppState.Error:
-                    _loginView.Hide();
-                    _homeView.Hide();
-                    Debug.LogError("[AppFlow] Error state");
                     break;
             }
         }
 
         async UniTask DoCheckUpdateAsync(CancellationToken ct)
         {
-            _loginView.Show();
-            _loginView.SetStatus("检查版本中…");
-
-            var (ok, resp, err) = await _version.CheckVersionAsync(ct);
-            if (!ok)
+            try
             {
-                // 版本检查失败不阻塞联调：继续走登录（本地开发常见）
-                Debug.LogWarning("[AppFlow] version-check failed, continue: " + err);
-                _loginView.SetStatus("版本检查失败（可继续联调）: " + err);
+                var (ok, resp, msg) = await _version.CheckVersionAsync(ct);
+                if (!ok)
+                    Debug.LogWarning("[AppFlow] version check failed: " + msg);
+                else if (resp != null && resp.force_update)
+                    Debug.LogWarning("[AppFlow] force update required, latest=" + resp.latest_client_version);
             }
-            else if (resp != null && resp.force_update)
+            catch (Exception e)
             {
-                _loginView.SetStatus($"强制更新: {resp.message}\n最新: {resp.latest_client_version}\n{resp.download_url}");
-                State = AppState.Error;
-                return;
-            }
-            else if (resp != null && resp.optional_update)
-            {
-                Debug.Log($"[AppFlow] optional update available: {resp.latest_client_version}");
+                Debug.LogWarning("[AppFlow] version check exception: " + e.Message);
             }
 
-            // 恢复 Token → 探活
             _auth.TryRestoreToken();
             if (!_auth.IsLoggedIn)
             {
@@ -154,14 +197,75 @@ namespace GameAct.AppFlow
 
         void HandleLogoutClicked()
         {
+            _net?.Disconnect();
+            _steam?.LeaveLobby();
             _auth.Logout();
             GotoAsync(AppState.Login).Forget();
+        }
+
+        async void HandleCreateLobby()
+        {
+            if (_steam == null || !_steam.IsInitialized)
+            {
+                _homeView.SetSteamStatus("Steam 未初始化");
+                return;
+            }
+            _homeView.SetSteamStatus("创建 Lobby…");
+            var id = await _steam.CreateLobbyAsync(4);
+            if (id == 0)
+                _homeView.SetSteamStatus("创建失败");
+        }
+
+        void HandleInviteFriends()
+        {
+            if (_steam == null || !_steam.IsInitialized)
+            {
+                _homeView.SetSteamStatus("Steam 未初始化");
+                return;
+            }
+            _steam.InviteFriendsOverlay();
+            _homeView.SetSteamStatus("已打开邀请 Overlay");
+        }
+
+        async void HandleStartHost()
+        {
+            if (_net == null)
+            {
+                _homeView.SetNetStatus("Net 未注入");
+                return;
+            }
+            _homeView.SetNetStatus("启动 Host…");
+            var ok = await _net.StartHostAsync(9050);
+            _homeView.SetNetStatus(ok ? _net.StatusText : "Host 失败");
+        }
+
+        async void HandleConnectLocal()
+        {
+            if (_net == null)
+            {
+                _homeView.SetNetStatus("Net 未注入");
+                return;
+            }
+            _homeView.SetNetStatus("连接 127.0.0.1:9050…");
+            var ok = await _net.ConnectAsync("127.0.0.1", 9050);
+            _homeView.SetNetStatus(ok ? _net.StatusText : "连接失败");
+        }
+
+        void HandleDisconnectNet()
+        {
+            _net?.Disconnect();
+            _homeView.SetNetStatus("已断开");
         }
 
         async UniTask EnterHomeAsync(CancellationToken ct)
         {
             _homeView.Show();
             _homeView.SetStatus("拉取资料中…");
+
+            if (_steam != null && _steam.IsInitialized)
+                _homeView.SetSteamStatus($"OK  {_steam.PersonaName}");
+            if (_net != null)
+                _homeView.SetNetStatus(_net.StatusText);
 
             try
             {
@@ -175,7 +279,6 @@ namespace GameAct.AppFlow
             }
             catch (UnauthorizedException)
             {
-                // OnUnauthorized 已处理
             }
             catch (Exception e)
             {
