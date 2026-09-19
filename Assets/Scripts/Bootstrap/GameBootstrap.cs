@@ -7,13 +7,12 @@ using GameAct.UI;
 using GameAct.Steam;
 using GameAct.Net;
 using GameAct.Net.LiteNet;
-using GameAct.Lobby;
 
 namespace GameAct.Bootstrap
 {
     /// <summary>
-    /// 场景入口：创建 Canvas + 运行时 Login/Home UI，启动 AppFlow。
-    /// 挂到 Demo 场景任意物体（与 GameLifetimeScope 同物体或子物体均可）。
+    /// 场景入口：创建 Canvas + 各独立 UI，启动 AppFlow。
+    /// 主菜单 / 大厅 / 房间 / 设置 各自 Build，互不嵌套。
     /// </summary>
     public class GameBootstrap : MonoBehaviour
     {
@@ -27,40 +26,29 @@ namespace GameAct.Bootstrap
         async UniTaskVoid BootstrapAsync()
         {
             await UniTask.Yield();
-
-            if (_appFlow == null)
-            {
-                ManualBootstrap();
-                return;
-            }
-
-            var canvas = EnsureCanvas();
-            var login = canvas.gameObject.AddComponent<RuntimeLoginView>();
-            login.Build(canvas.transform);
-            var home = canvas.gameObject.AddComponent<RuntimeHomeView>();
-            home.Build(canvas.transform);
-
-            if (_appFlow is AppFlowController)
-            {
-                ManualBootstrapWithViews(login, home);
-                return;
-            }
-
-            await _appFlow.StartAsync();
+            ManualBootstrap();
         }
 
         void ManualBootstrap()
         {
             var canvas = EnsureCanvas();
-            var login = canvas.gameObject.AddComponent<RuntimeLoginView>();
-            login.Build(canvas.transform);
-            var home = canvas.gameObject.AddComponent<RuntimeHomeView>();
-            home.Build(canvas.transform);
-            ManualBootstrapWithViews(login, home);
-        }
+            var root = canvas.transform;
 
-        void ManualBootstrapWithViews(ILoginView login, IHomeView home)
-        {
+            var login = canvas.gameObject.AddComponent<RuntimeLoginView>();
+            login.Build(root);
+
+            var mainMenu = canvas.gameObject.AddComponent<RuntimeMainMenuView>();
+            mainMenu.Build(root);
+
+            var lobby = canvas.gameObject.AddComponent<RuntimeLobbyView>();
+            lobby.Build(root);
+
+            var room = canvas.gameObject.AddComponent<RuntimeRoomView>();
+            room.Build(root);
+
+            var settings = canvas.gameObject.AddComponent<RuntimeSettingsView>();
+            settings.Build(root);
+
             var config = new Network.ApiConfig();
             var http = new Network.HttpClientService();
             var tokenStore = new Services.TokenStore();
@@ -70,14 +58,16 @@ namespace GameAct.Bootstrap
 
             var steam = new SteamService();
             var net = new LiteNetSession();
-            var lobby = new LobbyService(http, config);
 
             var runners = new GameObject("P1_Runners");
             DontDestroyOnLoad(runners);
             runners.AddComponent<SteamRunner>().Bind(steam);
             runners.AddComponent<NetRunner>().Bind(net);
 
-            var flow = new AppFlowController(version, auth, player, http, login, home, steam, net, config, lobby);
+            var flow = new AppFlowController(
+                version, auth, player, http,
+                login, mainMenu, lobby, room, settings,
+                steam, net, config);
             flow.StartAsync().Forget();
         }
 
