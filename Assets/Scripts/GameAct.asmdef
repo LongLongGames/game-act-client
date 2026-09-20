@@ -5,7 +5,8 @@
         "UniTask",
         "VContainer",
         "LiteNetLib",
-        "com.rlabrecque.steamworks.net"
+        "com.rlabrecque.steamworks.net",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

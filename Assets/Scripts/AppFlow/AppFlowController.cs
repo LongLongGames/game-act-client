@@ -9,6 +9,7 @@ using GameAct.Services;
 using GameAct.UI;
 using GameAct.Steam;
 using GameAct.Net;
+using GameAct.Gameplay;
 
 namespace GameAct.AppFlow
 {
@@ -242,11 +243,42 @@ namespace GameAct.AppFlow
             await UniTask.Delay(300);
             _loading?.Hide();
 
-            // 进游戏：显示 HUD，关掉 Boot 相机/Listener（避免双 Camera / 双 AudioListener）
+            // 进游戏：关 Boot 相机/Listener，切 Active 到关卡，再开 HUD / 玩法
             DisableBootCameraAndListener();
+            ActivateLevelScene(sceneName);
             _hud?.Show();
             _hud?.SetStatus("已进入 " + sceneName);
-            Debug.Log($"[AppFlow] Additive loaded: {sceneName}");
+
+            // 启动玩法：玩家实体创建在 Map1（非 Boot）
+            StartGameplay(sceneName);
+            Debug.Log($"[AppFlow] Additive loaded: {sceneName}, active={UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}");
+        }
+
+        void ActivateLevelScene(string sceneName)
+        {
+            var scene = UnityEngine.SceneManagement.SceneManager.GetSceneByName(sceneName);
+            if (scene.IsValid() && scene.isLoaded)
+                UnityEngine.SceneManagement.SceneManager.SetActiveScene(scene);
+            else
+                Debug.LogWarning($"[AppFlow] Cannot activate scene: {sceneName}");
+        }
+
+        void StartGameplay(string levelSceneName)
+        {
+            var existing = UnityEngine.Object.FindFirstObjectByType<GameplayRunner>();
+            if (existing != null)
+            {
+                existing.StartSession(_net, levelSceneName);
+                _hud?.SetStatus("玩法已就绪（复用）");
+                return;
+            }
+
+            // Runner 可常驻；实体由 StartSession 放进 level 场景
+            var go = new GameObject("GameplayRunner");
+            UnityEngine.Object.DontDestroyOnLoad(go);
+            var runner = go.AddComponent<GameplayRunner>();
+            runner.StartSession(_net, levelSceneName);
+            _hud?.SetStatus("WASD 移动 · Shift 冲刺 · Space 跳");
         }
 
         void DisableBootCameraAndListener()
