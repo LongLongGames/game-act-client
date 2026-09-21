@@ -30,8 +30,7 @@ namespace GameAct.Les.Shared
             Vector3 dir = Vector3.zero;
             if (!idle)
             {
-                // Unity 约定：yaw=0 朝 +Z，与 ActPlayer 一致
-                // forward = (Sin(yaw), 0, Cos(yaw))
+                // Unity 约定：yaw=0 朝 +Z
                 float rad = _yaw * Mathf.Deg2Rad;
                 dir = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad));
             }

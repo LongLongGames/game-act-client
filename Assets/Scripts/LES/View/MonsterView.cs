@@ -45,7 +45,6 @@ namespace GameAct.Les.View
             }
             else
             {
-                // fallback capsule
                 var capsule = GameObject.CreatePrimitive(PrimitiveType.Capsule);
                 capsule.name = "FallbackCapsule";
                 capsule.transform.SetParent(transform, false);
@@ -76,10 +75,7 @@ namespace GameAct.Les.View
                 Quaternion.Euler(0f, yawDegrees, 0f));
 
             if (_anim != null)
-            {
-                // Speed 驱动 Idle → Move（controller 里有 Speed 参数）
                 _anim.SetFloat(SpeedHash, speedXZ >= _walkThreshold ? 1f : 0f);
-            }
         }
 
         static GameObject LoadZomBunnyModel()

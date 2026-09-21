@@ -37,7 +37,6 @@ namespace GameAct.Les.Shared
             _yaw.Value = yawDegrees;
         }
 
-        // 跨程序集覆盖 protected internal → protected
         protected override void Update()
         {
             base.Update();
