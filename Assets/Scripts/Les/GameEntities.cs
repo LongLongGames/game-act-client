@@ -2,8 +2,8 @@ namespace GameAct.Les
 {
     public enum GameEntities : ushort
     {
-        Enemy = 0,
-        EnemyBot = 1,
+        Monster = 0,
+        MonsterBot = 1,
         Player = 2,
         PlayerController = 3
     }

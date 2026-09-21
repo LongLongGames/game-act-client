@@ -25,8 +25,8 @@ namespace GameAct.Les
         {
             EnsureFieldTypes();
             return new EntityTypesMap<GameEntities>()
-                .Register(GameEntities.Enemy, e => new ActEnemy(e))
-                .Register(GameEntities.EnemyBot, e => new EnemyBotController(e))
+                .Register(GameEntities.Monster, e => new ActMonster(e))
+                .Register(GameEntities.MonsterBot, e => new MonsterBotController(e))
                 .Register(GameEntities.Player, e => new ActPlayer(e))
                 .Register(GameEntities.PlayerController, e => new ActPlayerController(e));
         }

@@ -24,7 +24,7 @@ namespace GameAct.Les
     public sealed class LesNetworkHub : INetSession, INetEventListener, IDisposable
     {
         public const int DefaultPort = 9050;
-        public const int DefaultEnemyCount = 12;
+        public const int DefaultMonsterCount = 12;
         const string ConnectKey = "game-act-les";
 
         public NetRole Role { get; private set; } = NetRole.None;
@@ -44,7 +44,7 @@ namespace GameAct.Les
         NetPeer _serverPeer;
         NetPacketProcessor _packetProcessor;
         readonly NetDataWriter _writer = new NetDataWriter();
-        readonly List<EnemyView> _views = new List<EnemyView>(32);
+        readonly List<MonsterView> _views = new List<MonsterView>(32);
         Transform _viewRoot;
         string _levelScene;
         string _userName = "Player";
@@ -190,13 +190,13 @@ namespace GameAct.Les
             _manager?.PollEvents();
             ServerEm?.Update();
             ClientEm?.Update();
-            SyncEnemyViews();
+            SyncMonsterViews();
         }
 
         public void Dispose() => Disconnect();
 
         /// <summary>Host/Solo 权威刷怪；Client 靠快照构造。</summary>
-        public void SpawnEnemiesAround(Vector3 center, string levelScene, int count = DefaultEnemyCount)
+        public void SpawnMonstersAround(Vector3 center, string levelScene, int count = DefaultMonsterCount)
         {
             if (ServerEm == null || _enemiesSpawned) return;
             _levelScene = levelScene;
@@ -209,10 +209,10 @@ namespace GameAct.Les
                 float radius = 6f + (i % 3) * 2.5f;
                 var pos = SnapToGround(center + new Vector3(Mathf.Cos(ang) * radius, 0f, Mathf.Sin(ang) * radius));
 
-                var enemy = ServerEm.AddEntity<ActEnemy>(e => e.Spawn(pos));
-                ServerEm.AddAIController<EnemyBotController>(c => c.StartControl(enemy));
+                var monster = ServerEm.AddEntity<ActMonster>(e => e.Spawn(pos));
+                ServerEm.AddAIController<MonsterBotController>(c => c.StartControl(monster));
 
-                var view = EnemyView.Create(enemy.Id, pos, _viewRoot);
+                var view = MonsterView.Create(monster.Id, pos, _viewRoot);
                 MoveToLevel(view.gameObject, levelScene);
                 _views.Add(view);
             }
@@ -296,7 +296,7 @@ namespace GameAct.Les
         void EnsureViewRoot(string levelScene)
         {
             if (_viewRoot != null) return;
-            var go = new GameObject("LES_EnemyViews");
+            var go = new GameObject("LES_MonsterViews");
             _viewRoot = go.transform;
             MoveToLevel(go, levelScene);
         }
@@ -314,7 +314,7 @@ namespace GameAct.Les
             }
         }
 
-        void SyncEnemyViews()
+        void SyncMonsterViews()
         {
             EntityManager em = (EntityManager)ServerEm ?? ClientEm;
             if (em == null) return;
@@ -325,23 +325,23 @@ namespace GameAct.Les
             else if (ClientEm != null && _viewRoot == null)
                 EnsureViewRoot(SceneManager.GetActiveScene().name);
 
-            foreach (var enemy in em.GetEntities<ActEnemy>())
+            foreach (var monster in em.GetEntities<ActMonster>())
             {
-                if (enemy == null || enemy.IsDestroyed) continue;
-                var view = FindView(enemy.Id);
+                if (monster == null || monster.IsDestroyed) continue;
+                var view = FindView(monster.Id);
                 if (view == null)
                 {
                     if (_viewRoot == null)
                         EnsureViewRoot(_levelScene ?? "Map1");
-                    view = EnemyView.Create(enemy.Id, enemy.Position, _viewRoot);
+                    view = MonsterView.Create(monster.Id, monster.Position, _viewRoot);
                     MoveToLevel(view.gameObject, _levelScene ?? "Map1");
                     _views.Add(view);
                 }
-                view.Apply(enemy.Position, enemy.Yaw);
+                view.Apply(monster.Position, monster.Yaw, monster.SpeedXZ);
             }
         }
 
-        EnemyView FindView(ushort id)
+        MonsterView FindView(ushort id)
         {
             for (int i = 0; i < _views.Count; i++)
                 if (_views[i] != null && _views[i].EntityId == id)

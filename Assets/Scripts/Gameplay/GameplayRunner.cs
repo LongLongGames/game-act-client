@@ -54,7 +54,7 @@ namespace GameAct.Gameplay
             else if (mode == SessionMode.Host && net is LesNetworkHub hub)
             {
                 _lesLocalPlayer = hub.SpawnLocalPlayer(spawnPos);
-                hub.SpawnEnemiesAround(spawnPos, _levelSceneName);
+                hub.SpawnMonstersAround(spawnPos, _levelSceneName);
             }
             else if (mode == SessionMode.Client && net is LesNetworkHub)
             {

@@ -13,20 +13,20 @@ namespace GameAct.Les
     /// </summary>
     public sealed class LesAuthoritySession : IDisposable
     {
-        public const int DefaultEnemyCount = 12;
+        public const int DefaultMonsterCount = 12;
 
         ServerEntityManager _em;
-        readonly List<EnemyView> _views = new List<EnemyView>(32);
+        readonly List<MonsterView> _views = new List<MonsterView>(32);
         Transform _viewRoot;
         string _levelSceneName;
         bool _started;
         ActPlayer _localPlayer;
 
         public bool IsStarted => _started;
-        public int EnemyCount => _views.Count;
+        public int MonsterCount => _views.Count;
         public ActPlayer LocalPlayer => _localPlayer;
 
-        public void Start(Vector3 center, string levelSceneName, int enemyCount = DefaultEnemyCount)
+        public void Start(Vector3 center, string levelSceneName, int monsterCount = DefaultMonsterCount)
         {
             if (_started) Stop();
 
@@ -38,7 +38,7 @@ namespace GameAct.Les
                 ServerSendRate.EqualToFPS);
 
             _levelSceneName = levelSceneName;
-            _viewRoot = new GameObject("LES_EnemyViews_Solo").transform;
+            _viewRoot = new GameObject("LES_MonsterViews_Solo").transform;
             MoveToLevel(_viewRoot.gameObject, levelSceneName);
 
             _localPlayer = _em.AddEntity<ActPlayer>(e =>
@@ -47,22 +47,22 @@ namespace GameAct.Les
                 e.SetDriveLocally(true);
             });
 
-            int n = Mathf.Clamp(enemyCount, 0, 64);
+            int n = Mathf.Clamp(monsterCount, 0, 64);
             for (int i = 0; i < n; i++)
             {
                 float ang = (i / (float)Mathf.Max(1, n)) * Mathf.PI * 2f;
                 float radius = 6f + (i % 3) * 2.5f;
                 var pos = Snap(center + new Vector3(Mathf.Cos(ang) * radius, 0f, Mathf.Sin(ang) * radius));
 
-                var enemy = _em.AddEntity<ActEnemy>(e => e.Spawn(pos));
-                _em.AddAIController<EnemyBotController>(c => c.StartControl(enemy));
-                var view = EnemyView.Create(enemy.Id, pos, _viewRoot);
+                var monster = _em.AddEntity<ActMonster>(e => e.Spawn(pos));
+                _em.AddAIController<MonsterBotController>(c => c.StartControl(monster));
+                var view = MonsterView.Create(monster.Id, pos, _viewRoot);
                 MoveToLevel(view.gameObject, levelSceneName);
                 _views.Add(view);
             }
 
             _started = true;
-            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} enemies={n}");
+            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={n}");
         }
 
         public void Tick()
@@ -73,11 +73,11 @@ namespace GameAct.Les
             {
                 var view = _views[i];
                 if (view == null) continue;
-                foreach (var enemy in _em.GetEntities<ActEnemy>())
+                foreach (var monster in _em.GetEntities<ActMonster>())
                 {
-                    if (enemy != null && !enemy.IsDestroyed && enemy.Id == view.EntityId)
+                    if (monster != null && !monster.IsDestroyed && monster.Id == view.EntityId)
                     {
-                        view.Apply(enemy.Position, enemy.Yaw);
+                        view.Apply(monster.Position, monster.Yaw, monster.SpeedXZ);
                         break;
                     }
                 }
