@@ -2,7 +2,6 @@ using UnityEngine;
 
 namespace GameAct.Les.View
 {
-    /// <summary>敌人表现：简单胶囊，由权威姿态驱动。不进 LES 实体。</summary>
     public class EnemyView : MonoBehaviour
     {
         public ushort EntityId { get; private set; }
@@ -13,23 +12,16 @@ namespace GameAct.Les.View
             go.name = $"EnemyView_{entityId}";
             if (parent != null)
                 go.transform.SetParent(parent, false);
-
             go.transform.position = position;
             go.transform.localScale = new Vector3(0.7f, 0.9f, 0.7f);
 
-            // 去掉默认碰撞体与 LES 逻辑碰撞抢占；表现用 Trigger 即可
             var col = go.GetComponent<Collider>();
-            if (col != null)
-            {
-                col.isTrigger = true;
-            }
+            if (col != null) col.isTrigger = true;
 
             var rend = go.GetComponent<Renderer>();
             if (rend != null)
             {
-                // 运行时材质：偏红，便于和玩家区分
-                var mat = new Material(Shader.Find("Universal Render Pipeline/Lit")
-                                       ?? Shader.Find("Standard"));
+                var mat = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
                 if (mat != null)
                 {
                     if (mat.HasProperty("_BaseColor"))

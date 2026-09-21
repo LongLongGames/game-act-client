@@ -1,0 +1,9 @@
+将 AppFlowController.cs 中 EnsureGameplayNetworkAsync 整段替换为：
+
+        async UniTask EnsureGameplayNetworkAsync(SessionMode mode)
+        {
+            await GameAct.Les.LesNetworkGate.EnsureAsync(_net, _steam, mode, _loading);
+        }
+
+并在文件顶部 using 区增加（若没有）：
+using GameAct.Les;

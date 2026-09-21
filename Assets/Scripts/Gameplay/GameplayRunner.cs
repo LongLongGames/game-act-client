@@ -10,7 +10,7 @@ using GameAct.Les;
 namespace GameAct.Gameplay
 {
     /// <summary>
-    /// 会话级 Runner：玩家仍走 IGameSimulation；Solo/Host 额外挂 LES 权威敌人群。
+    /// 玩家仍走 IGameSimulation；敌人走 LES（Solo 离线 / Host 联机权威）。
     /// </summary>
     [DefaultExecutionOrder(0)]
     public class GameplayRunner : MonoBehaviour
@@ -22,7 +22,7 @@ namespace GameAct.Gameplay
         int _localId = -1;
         bool _started;
         string _levelSceneName = "Map1";
-        LesAuthoritySession _les;
+        LesAuthoritySession _lesSolo;
 
         public IGameSimulation Simulation => _sim;
         public string LevelSceneName => _levelSceneName;
@@ -50,7 +50,6 @@ namespace GameAct.Gameplay
             _localView = CreatePlayerView(_localId, isLocal: true);
             MoveToLevelScene(_localView.gameObject, _levelSceneName);
             _localView.transform.position = spawnPos;
-
             spawnPos = SnapToGround(_localView.transform.position);
             _localView.transform.position = spawnPos;
 
@@ -61,19 +60,20 @@ namespace GameAct.Gameplay
 
             _localView.EnableController();
 
-            // Solo / Host：LES ServerEntityManager 刷 AiController 敌人（不绑端口）
-            // Client：等快照接入后再同步敌人
-            if (mode == SessionMode.Solo || mode == SessionMode.Host)
+            // 敌人
+            if (mode == SessionMode.Solo)
             {
-                _les = new LesAuthoritySession();
-                _les.Start(spawnPos, _levelSceneName, LesAuthoritySession.DefaultEnemyCount);
+                _lesSolo = new LesAuthoritySession();
+                _lesSolo.Start(spawnPos, _levelSceneName, LesAuthoritySession.DefaultEnemyCount);
             }
+            else if (mode == SessionMode.Host && net is LesNetworkHub hub)
+            {
+                hub.SpawnEnemiesAround(spawnPos, _levelSceneName, LesNetworkHub.DefaultEnemyCount);
+            }
+            // Client：敌人由 LES 快照构造，LesNetworkHub.Poll → SyncEnemyViews
 
             _started = true;
-
-            Debug.Log($"[Gameplay] Session ready: mode={mode} localId={_localId} pos={spawnPos} " +
-                      $"level={_levelSceneName} lesEnemies={_les?.EnemyCount ?? 0} " +
-                      $"netRole={net?.Role} connected={net?.IsConnected}");
+            Debug.Log($"[Gameplay] mode={mode} pos={spawnPos} net={net?.Role}");
         }
 
         public void StartSession(INetSession net, string levelSceneName = "Map1")
@@ -86,8 +86,8 @@ namespace GameAct.Gameplay
 
         public void StopSession()
         {
-            _les?.Stop();
-            _les = null;
+            _lesSolo?.Stop();
+            _lesSolo = null;
 
             if (_sim != null && _localId >= 0)
                 _sim.Despawn(_localId);
@@ -114,30 +114,17 @@ namespace GameAct.Gameplay
                     return new LocalSimulation();
                 case SessionMode.Client:
                     if (net == null || !net.IsConnected || net.Role != NetRole.Client)
-                        throw new System.InvalidOperationException(
-                            "SessionMode.Client 要求已连接的 Client 会话，禁止降级 LocalSimulation");
+                        throw new System.InvalidOperationException("Client 未连接");
                     return new ClientSimulation();
                 default:
                     return new LocalSimulation();
             }
         }
 
-        public void PrepareSpawn() => EnsureLevelActive(_levelSceneName);
-
-        public void AttachToLevel(GameObject go)
-        {
-            if (go == null) return;
-            MoveToLevelScene(go, _levelSceneName);
-        }
-
         public static void EnsureLevelActive(string sceneName)
         {
             var scene = SceneManager.GetSceneByName(sceneName);
-            if (!scene.IsValid() || !scene.isLoaded)
-            {
-                Debug.LogWarning($"[Gameplay] Level scene not loaded: {sceneName}");
-                return;
-            }
+            if (!scene.IsValid() || !scene.isLoaded) return;
             if (SceneManager.GetActiveScene() != scene)
                 SceneManager.SetActiveScene(scene);
         }
@@ -155,11 +142,9 @@ namespace GameAct.Gameplay
         {
             var t = GameObject.Find("PlayerSpawn");
             if (t != null) return t.transform.position;
-
             var origin = new Vector3(0f, 50f, 0f);
             if (Physics.Raycast(origin, Vector3.down, out var hit, 200f))
                 return hit.point;
-
             return new Vector3(0f, 0.05f, 0f);
         }
 
@@ -168,11 +153,9 @@ namespace GameAct.Gameplay
             var origin = pos + Vector3.up * 5f;
             if (Physics.Raycast(origin, Vector3.down, out var hit, 20f, ~0, QueryTriggerInteraction.Ignore))
                 return hit.point + Vector3.up * 0.02f;
-
             origin = pos + Vector3.up * 50f;
             if (Physics.Raycast(origin, Vector3.down, out hit, 100f, ~0, QueryTriggerInteraction.Ignore))
                 return hit.point + Vector3.up * 0.02f;
-
             return new Vector3(pos.x, Mathf.Max(pos.y, 0.05f), pos.z);
         }
 
@@ -192,21 +175,18 @@ namespace GameAct.Gameplay
             var input = ReadInput();
             if (_localId >= 0)
                 _sim.ApplyInput(_localId, input);
-
             _sim.Tick(dt);
-
             if (_localView != null && _sim.TryGetPose(_localId, out var pose))
                 _localView.ApplyPose(pose);
 
-            // LES 敌人权威步进 + View
-            _les?.Tick();
+            // Solo 离线 LES；Host/Client 由 NetRunner → LesNetworkHub.Poll 驱动
+            _lesSolo?.Tick();
         }
 
         static PlayerInputCmd ReadInput()
         {
             float x = 0f, y = 0f;
             bool sprint = false, jump = false;
-
             var kb = Keyboard.current;
             if (kb != null)
             {
@@ -217,22 +197,14 @@ namespace GameAct.Gameplay
                 sprint = kb.leftShiftKey.isPressed;
                 jump = kb.spaceKey.wasPressedThisFrame;
             }
-
             var pad = Gamepad.current;
             if (pad != null)
             {
                 var stick = pad.leftStick.ReadValue();
-                if (stick.sqrMagnitude > 0.01f)
-                {
-                    x = stick.x;
-                    y = stick.y;
-                }
-                if (pad.leftShoulder.isPressed || pad.leftStickButton.isPressed)
-                    sprint = true;
-                if (pad.buttonSouth.wasPressedThisFrame)
-                    jump = true;
+                if (stick.sqrMagnitude > 0.01f) { x = stick.x; y = stick.y; }
+                if (pad.leftShoulder.isPressed || pad.leftStickButton.isPressed) sprint = true;
+                if (pad.buttonSouth.wasPressedThisFrame) jump = true;
             }
-
             return new PlayerInputCmd
             {
                 Move = new Vector2(x, y),
@@ -242,9 +214,6 @@ namespace GameAct.Gameplay
             };
         }
 
-        void OnDestroy()
-        {
-            StopSession();
-        }
+        void OnDestroy() => StopSession();
     }
 }
