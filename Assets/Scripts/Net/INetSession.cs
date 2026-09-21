@@ -5,6 +5,7 @@ namespace GameAct.Net
 {
     public enum NetRole
     {
+        /// <summary>空闲：未 Host / 未 Connect。单机应保持此状态。</summary>
         None,
         Host,
         Client
@@ -15,11 +16,14 @@ namespace GameAct.Net
         /// <summary>本机 UDP（开发 / 局域网）。</summary>
         Udp,
         /// <summary>Steam P2P（正式联机）。</summary>
-        SteamP2P
+        SteamP2P,
+        /// <summary>进程内 loopback（同进程 Server+LocalClient，不经 socket）。预留。</summary>
+        InProcess
     }
 
     /// <summary>
-    /// P1 网络会话：Host 或 Client。后续挂 StateSync。
+    /// 网络会话：Host 或 Client。
+    /// 单机路径不得 StartHost/Connect；Role 保持 None，NetRunner 不 Poll。
     /// </summary>
     public interface INetSession
     {
@@ -32,15 +36,15 @@ namespace GameAct.Net
         event Action OnDisconnected;
         event Action<string> OnLog;
 
-        /// <summary>以 Host 启动（监听 port，默认 9050）。</summary>
+        /// <summary>以 Host 启动（监听 port，默认 9050）。仅多人 Host。</summary>
         UniTask<bool> StartHostAsync(int port = 9050, NetTransportKind transport = NetTransportKind.Udp);
 
-        /// <summary>连接 Host（地址 或 Steam 后续扩展）。</summary>
+        /// <summary>连接 Host。仅多人 Client。</summary>
         UniTask<bool> ConnectAsync(string address, int port = 9050, NetTransportKind transport = NetTransportKind.Udp);
 
         void Disconnect();
 
-        /// <summary>发送原始字节（可靠）。P1 占位，P2 换成 StateSync 包。</summary>
+        /// <summary>发送原始字节（可靠）。P1 占位；Replication 阶段由 LES 接管。</summary>
         void SendReliable(byte[] data);
 
         void Poll();

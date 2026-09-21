@@ -4,8 +4,10 @@ using VContainer;
 namespace GameAct.Net
 {
     /// <summary>
-    /// 每帧 Poll LiteNetLib 事件。
+    /// 网络 Pump：必须早于 GameplayRunner.Update。
+    /// Role==None（单机 / 已 Disconnect）时不 Poll，避免空转与残留会话副作用。
     /// </summary>
+    [DefaultExecutionOrder(-1000)]
     public class NetRunner : MonoBehaviour
     {
         INetSession _session;
@@ -23,7 +25,9 @@ namespace GameAct.Net
 
         void Update()
         {
-            _session?.Poll();
+            if (_session == null || _session.Role == NetRole.None)
+                return;
+            _session.Poll();
         }
 
         void OnApplicationQuit()

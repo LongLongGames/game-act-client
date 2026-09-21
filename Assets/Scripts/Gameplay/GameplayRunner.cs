@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.InputSystem;
+using GameAct.AppFlow;
 using GameAct.Gameplay.Simulation;
 using GameAct.Gameplay.Player;
 using GameAct.Net;
@@ -9,12 +10,15 @@ namespace GameAct.Gameplay
 {
     /// <summary>
     /// 会话级 Runner：输入 → 模拟 → View。
-    /// 实体进关卡场景；玩家使用 Y_Bot + 贴地后再开 CharacterController。
+    /// 模式由 SessionMode 显式决定，禁止根据残留 NetSession 猜测。
+    /// 实体只 Spawn 一次；进关卡场景后贴地再开 CharacterController。
     /// </summary>
+    [DefaultExecutionOrder(0)]
     public class GameplayRunner : MonoBehaviour
     {
         IGameSimulation _sim;
         INetSession _net;
+        SessionMode _mode = SessionMode.Solo;
         PlayerView _localView;
         int _localId = -1;
         bool _started;
@@ -22,32 +26,38 @@ namespace GameAct.Gameplay
 
         public IGameSimulation Simulation => _sim;
         public string LevelSceneName => _levelSceneName;
+        public SessionMode Mode => _mode;
+        public bool IsStarted => _started;
 
-        public void StartSession(INetSession net, string levelSceneName = "Map1")
+        /// <summary>
+        /// 开始会话。multiplayer 未连上时不得调用 Client 模式（由 AppFlow 先校验）。
+        /// </summary>
+        public void StartSession(INetSession net, string levelSceneName, SessionMode mode)
         {
-            if (_started) return;
-            _started = true;
+            if (_started)
+            {
+                Debug.LogWarning("[Gameplay] StartSession ignored: already started. Call StopSession first.");
+                return;
+            }
+
             _net = net;
+            _mode = mode;
             _levelSceneName = string.IsNullOrEmpty(levelSceneName) ? "Map1" : levelSceneName;
 
             EnsureLevelActive(_levelSceneName);
+            _sim = CreateSimulation(mode, net);
 
-            bool isClientOnly = net != null && net.IsConnected && net.Role == NetRole.Client;
-            _sim = isClientOnly ? (IGameSimulation)new ClientSimulation() : new LocalSimulation();
-
+            // 只 Spawn 一次：先贴地算点，再创建实体与 View，避免旧版 Spawn→Despawn→Spawn。
             var spawnPos = SnapToGround(FindSpawnPosition());
-
             _localId = _sim.SpawnPlayer(spawnPos, isLocal: true);
+
             _localView = CreatePlayerView(_localId, isLocal: true);
             MoveToLevelScene(_localView.gameObject, _levelSceneName);
-
-            // 贴地后再写坐标，最后才启用 CC（防止生成帧重力穿地）
-            spawnPos = SnapToGround(spawnPos);
             _localView.transform.position = spawnPos;
-            // 同步模拟层初始坐标：重新绑定前再 Spawn 一次对齐
-            _sim.Despawn(_localId);
-            _localId = _sim.SpawnPlayer(spawnPos, isLocal: true);
-            _localView.EntityId = _localId;
+
+            // 关卡碰撞体就绪后再二次贴地写回 View（模拟层坐标已是 spawnPos；不 Despawn）
+            spawnPos = SnapToGround(_localView.transform.position);
+            _localView.transform.position = spawnPos;
 
             if (_sim is LocalSimulation local)
                 local.BindCharacterController(_localId, _localView.CharacterController);
@@ -55,9 +65,60 @@ namespace GameAct.Gameplay
                 client.BindCharacterController(_localId, _localView.CharacterController);
 
             _localView.EnableController();
+            _started = true;
 
-            Debug.Log($"[Gameplay] Y_Bot localId={_localId} pos={spawnPos} level={_levelSceneName} " +
-                      $"scene={_localView.gameObject.scene.name} role={net?.Role}");
+            Debug.Log($"[Gameplay] Session ready: mode={mode} localId={_localId} pos={spawnPos} " +
+                      $"level={_levelSceneName} scene={_localView.gameObject.scene.name} " +
+                      $"netRole={net?.Role} connected={net?.IsConnected}");
+        }
+
+        /// <summary>兼容旧调用：无 SessionMode 时按 net 状态推断（仅内部兜底，入口应传 SessionMode）。</summary>
+        public void StartSession(INetSession net, string levelSceneName = "Map1")
+        {
+            var mode = SessionMode.Solo;
+            if (net != null && net.IsConnected)
+            {
+                mode = net.Role == NetRole.Client ? SessionMode.Client : SessionMode.Host;
+            }
+            StartSession(net, levelSceneName, mode);
+        }
+
+        public void StopSession()
+        {
+            if (_sim != null && _localId >= 0)
+                _sim.Despawn(_localId);
+            _localId = -1;
+
+            if (_localView != null)
+            {
+                Destroy(_localView.gameObject);
+                _localView = null;
+            }
+
+            _sim = null;
+            _net = null;
+            _mode = SessionMode.Solo;
+            _started = false;
+        }
+
+        static IGameSimulation CreateSimulation(SessionMode mode, INetSession net)
+        {
+            switch (mode)
+            {
+                case SessionMode.Solo:
+                    // 单机：强制 Local，忽略任何残留 net
+                    return new LocalSimulation();
+                case SessionMode.Host:
+                    // Host 权威 = LocalSimulation（后续可换 LES ServerEntityManager）
+                    return new LocalSimulation();
+                case SessionMode.Client:
+                    if (net == null || !net.IsConnected || net.Role != NetRole.Client)
+                        throw new System.InvalidOperationException(
+                            "SessionMode.Client 要求已连接的 Client 会话，禁止降级 LocalSimulation");
+                    return new ClientSimulation();
+                default:
+                    return new LocalSimulation();
+            }
         }
 
         public void PrepareSpawn() => EnsureLevelActive(_levelSceneName);
@@ -101,14 +162,9 @@ namespace GameAct.Gameplay
             return new Vector3(0f, 0.05f, 0f);
         }
 
-        /// <summary>
-        /// 从点上方往下射线贴地。失败则略抬高，避免生成在网格内。
-        /// CharacterController 脚底在 transform.position，center.y=0.9 时胶囊底≈ position.y。
-        /// </summary>
         static Vector3 SnapToGround(Vector3 pos)
         {
             var origin = pos + Vector3.up * 5f;
-            // 多射线防薄碰撞漏检
             if (Physics.Raycast(origin, Vector3.down, out var hit, 20f, ~0, QueryTriggerInteraction.Ignore))
                 return hit.point + Vector3.up * 0.02f;
 
@@ -116,13 +172,12 @@ namespace GameAct.Gameplay
             if (Physics.Raycast(origin, Vector3.down, out hit, 100f, ~0, QueryTriggerInteraction.Ignore))
                 return hit.point + Vector3.up * 0.02f;
 
-            // 没碰到碰撞体：不要从高空扔下去，保持原 y 或微抬
             return new Vector3(pos.x, Mathf.Max(pos.y, 0.05f), pos.z);
         }
 
         static PlayerView CreatePlayerView(int entityId, bool isLocal)
         {
-            var go = new GameObject();
+            var go = new GameObject("PlayerView_Local");
             var view = go.AddComponent<PlayerView>();
             view.Setup(entityId, isLocal);
             return view;
@@ -185,8 +240,7 @@ namespace GameAct.Gameplay
 
         void OnDestroy()
         {
-            if (_sim != null && _localId >= 0)
-                _sim.Despawn(_localId);
+            StopSession();
         }
     }
 }

@@ -6,6 +6,7 @@ namespace GameAct.AppFlow
         CheckUpdate,
         Login,
         Home,
+        Gameplay,
         Error
     }
 }

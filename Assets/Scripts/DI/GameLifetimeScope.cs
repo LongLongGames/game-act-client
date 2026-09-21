@@ -13,7 +13,8 @@ using GameAct.Lobby;
 namespace GameAct.DI
 {
     /// <summary>
-    /// P1 根 LifetimeScope。配置统一 ClientConfigLoader，不再在 Inspector 散落 URL。
+    /// 根 LifetimeScope。
+    /// INetSession 注册为单例但不自动 Start；Solo 保持 Role=None。
     /// </summary>
     public class GameLifetimeScope : LifetimeScope
     {

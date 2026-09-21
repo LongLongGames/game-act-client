@@ -13,7 +13,8 @@ namespace GameAct.Bootstrap
 {
     /// <summary>
     /// 场景入口：创建 Canvas + 各独立 UI，启动 AppFlow。
-    /// 配置统一走 ClientConfigLoader（StreamingAssets/client_config.json）。
+    /// LiteNetSession 仅作为可注入依赖存在；单机路径不会 StartHost/Connect，
+    /// NetRunner 在 Role==None 时不 Poll（运行时等价无 LiteNet 活动）。
     /// </summary>
     public class GameBootstrap : MonoBehaviour
     {
@@ -66,6 +67,7 @@ namespace GameAct.Bootstrap
             var player = new Services.PlayerService(http, config);
 
             var steam = new SteamService();
+            // 会话对象可存在；在 StartHost/Connect 之前 Role=None，不占端口、不 Poll。
             var net = new LiteNetSession();
 
             var runners = new GameObject("P1_Runners");

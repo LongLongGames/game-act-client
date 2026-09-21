@@ -14,8 +14,9 @@ using GameAct.Gameplay;
 namespace GameAct.AppFlow
 {
     /// <summary>
-    /// 流程控制器：持有各自独立的 View，负责页面切换与业务。
-    /// 主菜单 / 大厅 / 房间 / 设置 完全解耦，互不嵌套。
+    /// 流程控制器：页面互斥 + 进局时序。
+    /// 单机：不 StartHost/Connect，进图前 Disconnect，运行时无 LiteNet Poll。
+    /// 多人：点开始时才并行启动网络与场景；失败回房间，禁止降级单机。
     /// </summary>
     public class AppFlowController : IAppFlow
     {
@@ -38,6 +39,8 @@ namespace GameAct.AppFlow
 
         bool _unauthorizedHandling;
         bool _isRoomHost;
+        bool _gameStarting;
+        string _pendingLevelName = "Map1";
 
         float _bgmVolume = 80f;
         float _sfxVolume = 100f;
@@ -87,7 +90,7 @@ namespace GameAct.AppFlow
             _login.OnDevLoginSubmitted += HandleDevLoginSubmitted;
             _login.OnSteamEnterClicked += HandleSteamEnterClicked;
 
-            _mainMenu.OnSinglePlayerClicked += () => StartGameAsync("Map1").Forget();
+            _mainMenu.OnSinglePlayerClicked += () => StartGameAsync("Map1", SessionMode.Solo).Forget();
             _mainMenu.OnMultiplayerClicked += HandleMultiplayer;
             _mainMenu.OnAchievementsClicked += () => _mainMenu.SetStatus("成就：占位（独立界面后续接）");
             _mainMenu.OnSettingsClicked += HandleOpenSettings;
@@ -100,7 +103,11 @@ namespace GameAct.AppFlow
 
             _room.OnLeaveClicked += HandleRoomLeave;
             _room.OnInviteClicked += HandleInvite;
-            _room.OnStartClicked += () => StartGameAsync("Map1").Forget();
+            _room.OnStartClicked += () =>
+            {
+                var mode = _isRoomHost ? SessionMode.Host : SessionMode.Client;
+                StartGameAsync("Map1", mode).Forget();
+            };
 
             if (_hud != null)
             {
@@ -135,11 +142,11 @@ namespace GameAct.AppFlow
 
             InitSteam();
             LoadSettingsPrefs();
-            Debug.Log("[AppFlow] Start — views decoupled");
+            Debug.Log("[AppFlow] Start — SessionMode explicit, Solo zero-LiteNet runtime");
             await GotoAsync(AppState.CheckUpdate, ct);
         }
 
-        // ─── 页面互斥切换 ───────────────────────────────────
+        // ─── 页面互斥 ───────────────────────────────────────
 
         void ShowOnlyMainMenu()
         {
@@ -207,78 +214,197 @@ namespace GameAct.AppFlow
             _loading?.Show();
         }
 
-        /// <summary>
-        /// 开始游戏：显示 Loading，异步 Additive 加载指定场景（默认 Map1）。
-        /// </summary>
-        async UniTaskVoid StartGameAsync(string sceneName = "Map1")
-        {
-            ShowOnlyLoading();
-            _loading?.SetStatus($"正在加载 {sceneName}…");
-            _loading?.SetProgress(0f);
+        // ─── 进局：Loading → 并行(Net+Scene) → Active → Gameplay → HUD → 关 Loading ──
 
-            // 确保场景已加入 Build Settings；若未加入则尝试按名加载
+        async UniTaskVoid StartGameAsync(string sceneName, SessionMode mode)
+        {
+            if (_gameStarting) return;
+            _gameStarting = true;
+            _pendingLevelName = sceneName;
+            bool fromRoom = mode == SessionMode.Host || mode == SessionMode.Client;
+
+            try
+            {
+                ShowOnlyLoading();
+                _loading?.SetProgress(0f);
+                _loading?.SetStatus(mode == SessionMode.Solo
+                    ? $"正在加载 {sceneName}…"
+                    : "正在准备网络与场景…");
+
+                // Solo：先清残留网络，保证本局无 Host/Client
+                if (mode == SessionMode.Solo)
+                    _net?.Disconnect();
+
+                var networkTask = EnsureGameplayNetworkAsync(mode);
+                var sceneTask = LoadLevelSceneAsync(sceneName);
+
+                var scene = await sceneTask;
+                await networkTask;
+
+                if (!scene.IsValid() || !scene.isLoaded)
+                    throw new InvalidOperationException($"场景未正确加载：{sceneName}");
+
+                _loading?.SetStatus("正在初始化玩法…");
+                _loading?.SetProgress(0.92f);
+
+                DisableBootCameraAndListener();
+                SceneManager.SetActiveScene(scene);
+
+                StartGameplay(sceneName, mode);
+
+                State = AppState.Gameplay;
+                _hud?.Show();
+                _hud?.SetStatus(mode == SessionMode.Solo
+                    ? "单机 · WASD 移动 · Shift 冲刺 · Space 跳"
+                    : $"联机({mode}) · 已进入 {sceneName}");
+                _loading?.SetProgress(1f);
+                _loading?.SetStatus("进入游戏");
+                await UniTask.Yield();
+                _loading?.Hide();
+
+                Debug.Log($"[AppFlow] Gameplay ready: scene={sceneName} mode={mode} " +
+                          $"netRole={_net?.Role} connected={_net?.IsConnected}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[AppFlow] StartGame failed: {e}");
+                _loading?.SetStatus("进入游戏失败：" + e.Message);
+                _loading?.SetProgress(0f);
+                await UniTask.Delay(1200);
+
+                // 关卡可能已 Additive 加载：失败时卸掉，避免堆场景
+                await UnloadLevelIfLoadedAsync(sceneName);
+
+                if (mode != SessionMode.Solo)
+                    _net?.Disconnect();
+
+                StopExistingGameplay();
+
+                if (fromRoom && _steam != null && _steam.CurrentLobbyId != 0)
+                {
+                    ShowOnlyRoom();
+                    RefreshWaitingMembers();
+                    _room.SetStatus("进入游戏失败：" + e.Message);
+                }
+                else
+                {
+                    ShowOnlyMainMenu();
+                    _mainMenu.SetStatus("进入游戏失败：" + e.Message);
+                }
+
+                State = AppState.Home;
+            }
+            finally
+            {
+                _gameStarting = false;
+            }
+        }
+
+        async UniTask EnsureGameplayNetworkAsync(SessionMode mode)
+        {
+            switch (mode)
+            {
+                case SessionMode.Solo:
+                    // 运行时零 LiteNet：已 Disconnect，Role=None，NetRunner 不 Poll
+                    return;
+
+                case SessionMode.Host:
+                    if (_net == null)
+                        throw new InvalidOperationException("网络会话未注册");
+                    if (_net.IsConnected && _net.Role == NetRole.Host)
+                        return;
+                    _loading?.SetStatus("正在启动 Host…");
+                    var hostOk = await _net.StartHostAsync(9050);
+                    if (!hostOk)
+                        throw new InvalidOperationException("LiteNetLib Host 启动失败");
+                    return;
+
+                case SessionMode.Client:
+                    if (_net == null)
+                        throw new InvalidOperationException("网络会话未注册");
+                    // 正式联机：此处应 Connect（Steam Lobby Data / SteamP2P）。
+                    // 当前未接 Client 连接 → 明确失败，禁止静默 LocalSimulation。
+                    if (!_net.IsConnected || _net.Role != NetRole.Client)
+                        throw new InvalidOperationException(
+                            "多人客户端尚未连接 Host（SteamP2P / 地址交换未接入）");
+                    return;
+
+                default:
+                    throw new InvalidOperationException("未知 SessionMode: " + mode);
+            }
+        }
+
+        async UniTask<Scene> LoadLevelSceneAsync(string sceneName)
+        {
+            if (string.IsNullOrWhiteSpace(sceneName))
+                throw new ArgumentException("场景名为空", nameof(sceneName));
+
+            var existing = SceneManager.GetSceneByName(sceneName);
+            if (existing.IsValid() && existing.isLoaded)
+            {
+                _loading?.SetProgress(0.9f);
+                return existing;
+            }
+
             var op = SceneManager.LoadSceneAsync(sceneName, LoadSceneMode.Additive);
             if (op == null)
-            {
-                _loading?.SetStatus($"加载失败：场景 {sceneName} 不存在或未加入 Build Settings");
-                Debug.LogError($"[AppFlow] LoadSceneAsync failed: {sceneName}");
-                await UniTask.Delay(2000);
-                ShowOnlyMainMenu();
-                _mainMenu.SetStatus($"加载失败: {sceneName}");
-                return;
-            }
+                throw new InvalidOperationException($"场景 {sceneName} 不存在或未加入 Build Settings");
 
             op.allowSceneActivation = true;
             while (!op.isDone)
             {
-                // Unity 进度 0~0.9 为加载，0.9~1 为激活
-                float p = Mathf.Clamp01(op.progress / 0.9f);
-                _loading?.SetProgress(p);
-                _loading?.SetStatus($"加载中… {(int)(p * 100)}%");
+                _loading?.SetProgress(Mathf.Clamp01(op.progress / 0.9f) * 0.9f);
+                _loading?.SetStatus($"加载场景 {sceneName}… {(int)(Mathf.Clamp01(op.progress / 0.9f) * 100f)}%");
                 await UniTask.Yield();
             }
 
-            _loading?.SetProgress(1f);
-            _loading?.SetStatus("加载完成");
-            await UniTask.Delay(300);
-            _loading?.Hide();
-
-            // 进游戏：关 Boot 相机/Listener，切 Active 到关卡，再开 HUD / 玩法
-            DisableBootCameraAndListener();
-            ActivateLevelScene(sceneName);
-            _hud?.Show();
-            _hud?.SetStatus("已进入 " + sceneName);
-
-            // 启动玩法：玩家实体创建在 Map1（非 Boot）
-            StartGameplay(sceneName);
-            Debug.Log($"[AppFlow] Additive loaded: {sceneName}, active={UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}");
+            return SceneManager.GetSceneByName(sceneName);
         }
 
-        void ActivateLevelScene(string sceneName)
+        async UniTask UnloadLevelIfLoadedAsync(string sceneName)
         {
-            var scene = UnityEngine.SceneManagement.SceneManager.GetSceneByName(sceneName);
-            if (scene.IsValid() && scene.isLoaded)
-                UnityEngine.SceneManagement.SceneManager.SetActiveScene(scene);
-            else
-                Debug.LogWarning($"[AppFlow] Cannot activate scene: {sceneName}");
+            var scene = SceneManager.GetSceneByName(sceneName);
+            if (!scene.IsValid() || !scene.isLoaded) return;
+            try
+            {
+                var op = SceneManager.UnloadSceneAsync(scene);
+                if (op != null)
+                {
+                    while (!op.isDone)
+                        await UniTask.Yield();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[AppFlow] UnloadLevel: " + e.Message);
+            }
         }
 
-        void StartGameplay(string levelSceneName)
+        void StartGameplay(string levelSceneName, SessionMode mode)
         {
+            // Solo 不传 net；Host/Client 传会话（Client 已在 Ensure 校验过）
+            INetSession gameplayNet = mode == SessionMode.Solo ? null : _net;
+
             var existing = UnityEngine.Object.FindFirstObjectByType<GameplayRunner>();
             if (existing != null)
             {
-                existing.StartSession(_net, levelSceneName);
-                _hud?.SetStatus("玩法已就绪（复用）");
+                if (existing.IsStarted)
+                    existing.StopSession();
+                existing.StartSession(gameplayNet, levelSceneName, mode);
                 return;
             }
 
-            // Runner 可常驻；实体由 StartSession 放进 level 场景
             var go = new GameObject("GameplayRunner");
             UnityEngine.Object.DontDestroyOnLoad(go);
             var runner = go.AddComponent<GameplayRunner>();
-            runner.StartSession(_net, levelSceneName);
-            _hud?.SetStatus("WASD 移动 · Shift 冲刺 · Space 跳");
+            runner.StartSession(gameplayNet, levelSceneName, mode);
+        }
+
+        void StopExistingGameplay()
+        {
+            var existing = UnityEngine.Object.FindFirstObjectByType<GameplayRunner>();
+            if (existing != null)
+                existing.StopSession();
         }
 
         void DisableBootCameraAndListener()
@@ -421,6 +547,8 @@ namespace GameAct.AppFlow
 
         async UniTask EnterMainMenuAsync(CancellationToken ct)
         {
+            // 回主菜单时确保无残留网络
+            _net?.Disconnect();
             ShowOnlyMainMenu();
             _mainMenu.SetVersions("v" + _config.ClientVersionCode, _config.ResourceVersion);
             _mainMenu.SetStatus("拉取资料中…");
@@ -500,9 +628,8 @@ namespace GameAct.AppFlow
             }
 
             _isRoomHost = true;
-            if (_net != null && !_net.IsConnected)
-                await _net.StartHostAsync(9050);
-
+            // 网络不在创建房间时启动；点开始再与场景并行 StartHost
+            _net?.Disconnect();
             EnterRoomWaiting();
         }
 
@@ -528,6 +655,7 @@ namespace GameAct.AppFlow
             }
 
             _isRoomHost = false;
+            _net?.Disconnect();
             EnterRoomWaiting();
         }
 
@@ -538,8 +666,8 @@ namespace GameAct.AppFlow
             ShowOnlyRoom();
             RefreshWaitingMembers();
             _room.SetStatus(_isRoomHost
-                ? "你是房主 · 等待其他玩家（Steam Lobby）"
-                : "已加入 · 等待房主开始");
+                ? "你是房主 · 等待其他玩家（Steam Lobby）· 点开始再启 Host"
+                : "已加入 · 等待房主开始（客户端连接后续接入）");
         }
 
         void RefreshWaitingMembers()
@@ -580,6 +708,7 @@ namespace GameAct.AppFlow
             _isRoomHost = false;
             _net?.Disconnect();
             _steam?.LeaveLobby();
+            StopExistingGameplay();
             ShowOnlyLobby();
             HandleRefreshLobby().Forget();
         }
@@ -589,6 +718,7 @@ namespace GameAct.AppFlow
             _isRoomHost = false;
             _net?.Disconnect();
             _steam?.LeaveLobby();
+            StopExistingGameplay();
             _auth.Logout();
 #if UNITY_EDITOR
             UnityEditor.EditorApplication.isPlaying = false;
