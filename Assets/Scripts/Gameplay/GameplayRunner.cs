@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using GameAct.AppFlow;
 using GameAct.Gameplay.Player;
+using GameAct.Gameplay.Camera;
 using GameAct.Net;
 using GameAct.Les;
 using GameAct.Les.Shared;
@@ -9,7 +10,8 @@ using GameAct.Les.Shared;
 namespace GameAct.Gameplay
 {
     /// <summary>
-    /// LES 主路径：Input → ActPlayer 积分 → View 只跟位姿（无 CharacterController）。
+    /// LES 主路径：Input → ActPlayer 积分 → View 只跟位姿。
+    /// 相机跟随「视线 Yaw」（鼠标），模型用身体 Yaw（朝移动方向）。
     /// </summary>
     [DefaultExecutionOrder(0)]
     public class GameplayRunner : MonoBehaviour
@@ -17,6 +19,7 @@ namespace GameAct.Gameplay
         INetSession _net;
         SessionMode _mode = SessionMode.Solo;
         PlayerView _localView;
+        ThirdPersonCamera _camera;
         bool _started;
         string _levelSceneName = "Map1";
         LesAuthoritySession _lesSolo;
@@ -25,6 +28,7 @@ namespace GameAct.Gameplay
         public SessionMode Mode => _mode;
         public bool IsStarted => _started;
         public ActPlayer LesLocalPlayer => _lesLocalPlayer;
+        public ThirdPersonCamera Camera => _camera;
 
         public void StartSession(INetSession net, string levelSceneName, SessionMode mode)
         {
@@ -68,8 +72,15 @@ namespace GameAct.Gameplay
             else
                 _localView.ApplyPose(spawnPos, 0f, 0f);
 
+            _camera = ThirdPersonCamera.EnsureMain();
+            if (_lesLocalPlayer != null)
+            {
+                _camera.SetTargetPose(_lesLocalPlayer.Position, _lesLocalPlayer.LookYaw);
+                _camera.SnapToTarget();
+            }
+
             _started = true;
-            Debug.Log($"[Gameplay] LES session mode={mode} spawn={spawnPos} (no CC)");
+            Debug.Log($"[Gameplay] LES session mode={mode} spawn={spawnPos} (body turns to move dir)");
         }
 
         public void StartSession(INetSession net, string levelSceneName = "Map1")
@@ -90,6 +101,7 @@ namespace GameAct.Gameplay
                 Destroy(_localView.gameObject);
                 _localView = null;
             }
+            _camera = null;
             _net = null;
             _mode = SessionMode.Solo;
             _started = false;
@@ -106,9 +118,16 @@ namespace GameAct.Gameplay
 
             if (_lesLocalPlayer != null && !_lesLocalPlayer.IsDestroyed && _localView != null)
             {
+                var pos = _lesLocalPlayer.InterpolatedPosition;
+                // 模型：身体朝向（会转向移动方向）
+                var bodyYaw = _lesLocalPlayer.InterpolatedYaw;
                 var v = _lesLocalPlayer.Velocity;
                 float speedXZ = new Vector2(v.x, v.z).magnitude;
-                _localView.ApplyPose(_lesLocalPlayer.Position, _lesLocalPlayer.Yaw, speedXZ);
+                _localView.ApplyPose(pos, bodyYaw, speedXZ);
+
+                // 相机：视线 Yaw（鼠标），按 A 转身时镜头不会硬甩
+                if (_camera != null)
+                    _camera.SetTargetPose(pos, _lesLocalPlayer.LookYaw);
             }
         }
 

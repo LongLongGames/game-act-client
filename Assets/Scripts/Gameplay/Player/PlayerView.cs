@@ -86,7 +86,7 @@ namespace GameAct.Gameplay.Player
 
         static GameObject LoadYBotModel()
         {
-            var res = Resources.Load<GameObject>("Character/Y_Bot");
+            var res = Resources.Load<GameObject>("Character/Player/Y_Bot");
             if (res != null) return Object.Instantiate(res);
 
 #if UNITY_EDITOR
@@ -97,7 +97,7 @@ namespace GameAct.Gameplay.Player
                 if (method != null)
                 {
                     var prefab = method.Invoke(null, new object[] {
-                        "Assets/Bundles/Character/Y_Bot.prefab", typeof(GameObject)
+                        "Assets/Bundles/Character/Player/Y_Bot.prefab", typeof(GameObject)
                     }) as GameObject;
                     if (prefab != null) return Object.Instantiate(prefab);
                 }
