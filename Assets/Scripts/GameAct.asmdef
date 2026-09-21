@@ -5,6 +5,7 @@
         "UniTask",
         "VContainer",
         "LiteNetLib",
+        "LiteEntitySystem",
         "com.rlabrecque.steamworks.net",
         "Unity.InputSystem"
     ],

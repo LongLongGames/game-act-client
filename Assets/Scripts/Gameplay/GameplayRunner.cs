@@ -5,13 +5,12 @@ using GameAct.AppFlow;
 using GameAct.Gameplay.Simulation;
 using GameAct.Gameplay.Player;
 using GameAct.Net;
+using GameAct.Les;
 
 namespace GameAct.Gameplay
 {
     /// <summary>
-    /// 会话级 Runner：输入 → 模拟 → View。
-    /// 模式由 SessionMode 显式决定，禁止根据残留 NetSession 猜测。
-    /// 实体只 Spawn 一次；进关卡场景后贴地再开 CharacterController。
+    /// 会话级 Runner：玩家仍走 IGameSimulation；Solo/Host 额外挂 LES 权威敌人群。
     /// </summary>
     [DefaultExecutionOrder(0)]
     public class GameplayRunner : MonoBehaviour
@@ -23,15 +22,13 @@ namespace GameAct.Gameplay
         int _localId = -1;
         bool _started;
         string _levelSceneName = "Map1";
+        LesAuthoritySession _les;
 
         public IGameSimulation Simulation => _sim;
         public string LevelSceneName => _levelSceneName;
         public SessionMode Mode => _mode;
         public bool IsStarted => _started;
 
-        /// <summary>
-        /// 开始会话。multiplayer 未连上时不得调用 Client 模式（由 AppFlow 先校验）。
-        /// </summary>
         public void StartSession(INetSession net, string levelSceneName, SessionMode mode)
         {
             if (_started)
@@ -47,7 +44,6 @@ namespace GameAct.Gameplay
             EnsureLevelActive(_levelSceneName);
             _sim = CreateSimulation(mode, net);
 
-            // 只 Spawn 一次：先贴地算点，再创建实体与 View，避免旧版 Spawn→Despawn→Spawn。
             var spawnPos = SnapToGround(FindSpawnPosition());
             _localId = _sim.SpawnPlayer(spawnPos, isLocal: true);
 
@@ -55,7 +51,6 @@ namespace GameAct.Gameplay
             MoveToLevelScene(_localView.gameObject, _levelSceneName);
             _localView.transform.position = spawnPos;
 
-            // 关卡碰撞体就绪后再二次贴地写回 View（模拟层坐标已是 spawnPos；不 Despawn）
             spawnPos = SnapToGround(_localView.transform.position);
             _localView.transform.position = spawnPos;
 
@@ -65,26 +60,35 @@ namespace GameAct.Gameplay
                 client.BindCharacterController(_localId, _localView.CharacterController);
 
             _localView.EnableController();
+
+            // Solo / Host：LES ServerEntityManager 刷 AiController 敌人（不绑端口）
+            // Client：等快照接入后再同步敌人
+            if (mode == SessionMode.Solo || mode == SessionMode.Host)
+            {
+                _les = new LesAuthoritySession();
+                _les.Start(spawnPos, _levelSceneName, LesAuthoritySession.DefaultEnemyCount);
+            }
+
             _started = true;
 
             Debug.Log($"[Gameplay] Session ready: mode={mode} localId={_localId} pos={spawnPos} " +
-                      $"level={_levelSceneName} scene={_localView.gameObject.scene.name} " +
+                      $"level={_levelSceneName} lesEnemies={_les?.EnemyCount ?? 0} " +
                       $"netRole={net?.Role} connected={net?.IsConnected}");
         }
 
-        /// <summary>兼容旧调用：无 SessionMode 时按 net 状态推断（仅内部兜底，入口应传 SessionMode）。</summary>
         public void StartSession(INetSession net, string levelSceneName = "Map1")
         {
             var mode = SessionMode.Solo;
             if (net != null && net.IsConnected)
-            {
                 mode = net.Role == NetRole.Client ? SessionMode.Client : SessionMode.Host;
-            }
             StartSession(net, levelSceneName, mode);
         }
 
         public void StopSession()
         {
+            _les?.Stop();
+            _les = null;
+
             if (_sim != null && _localId >= 0)
                 _sim.Despawn(_localId);
             _localId = -1;
@@ -106,10 +110,7 @@ namespace GameAct.Gameplay
             switch (mode)
             {
                 case SessionMode.Solo:
-                    // 单机：强制 Local，忽略任何残留 net
-                    return new LocalSimulation();
                 case SessionMode.Host:
-                    // Host 权威 = LocalSimulation（后续可换 LES ServerEntityManager）
                     return new LocalSimulation();
                 case SessionMode.Client:
                     if (net == null || !net.IsConnected || net.Role != NetRole.Client)
@@ -196,6 +197,9 @@ namespace GameAct.Gameplay
 
             if (_localView != null && _sim.TryGetPose(_localId, out var pose))
                 _localView.ApplyPose(pose);
+
+            // LES 敌人权威步进 + View
+            _les?.Tick();
         }
 
         static PlayerInputCmd ReadInput()
