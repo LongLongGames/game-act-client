@@ -9,8 +9,7 @@ using GameAct.Les.View;
 namespace GameAct.Les
 {
     /// <summary>
-    /// Solo 离线权威：仅 ServerEntityManager，不绑端口。
-    /// Host 联机请用 LesNetworkHub.SpawnEnemiesAround。
+    /// Solo 离线权威：ServerEntityManager + 本地 ActPlayer + 敌人，不绑端口。
     /// </summary>
     public sealed class LesAuthoritySession : IDisposable
     {
@@ -21,9 +20,11 @@ namespace GameAct.Les
         Transform _viewRoot;
         string _levelSceneName;
         bool _started;
+        ActPlayer _localPlayer;
 
         public bool IsStarted => _started;
         public int EnemyCount => _views.Count;
+        public ActPlayer LocalPlayer => _localPlayer;
 
         public void Start(Vector3 center, string levelSceneName, int enemyCount = DefaultEnemyCount)
         {
@@ -40,6 +41,12 @@ namespace GameAct.Les
             _viewRoot = new GameObject("LES_EnemyViews_Solo").transform;
             MoveToLevel(_viewRoot.gameObject, levelSceneName);
 
+            _localPlayer = _em.AddEntity<ActPlayer>(e =>
+            {
+                e.Spawn(center);
+                e.SetDriveLocally(true);
+            });
+
             int n = Mathf.Clamp(enemyCount, 0, 64);
             for (int i = 0; i < n; i++)
             {
@@ -55,7 +62,7 @@ namespace GameAct.Les
             }
 
             _started = true;
-            Debug.Log($"[LES] Offline authority: enemies={n}");
+            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} enemies={n}");
         }
 
         public void Tick()
@@ -79,6 +86,7 @@ namespace GameAct.Les
 
         public void Stop()
         {
+            _localPlayer = null;
             for (int i = 0; i < _views.Count; i++)
                 if (_views[i] != null) UnityEngine.Object.Destroy(_views[i].gameObject);
             _views.Clear();

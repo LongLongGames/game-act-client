@@ -221,6 +221,22 @@ namespace GameAct.Les
             Log($"Spawned {n} LES enemies around {center}");
         }
 
+        /// <summary>
+        /// Host/权威本地玩家：无 HumanController，DriveLocally 读输入。
+        /// </summary>
+        public ActPlayer SpawnLocalPlayer(Vector3 position)
+        {
+            if (ServerEm == null)
+                throw new InvalidOperationException("ServerEm is null");
+            var player = ServerEm.AddEntity<ActPlayer>(e =>
+            {
+                e.Spawn(position);
+                e.SetDriveLocally(true);
+            });
+            Log($"Spawned local ActPlayer id={player.Id}");
+            return player;
+        }
+
         void ApplySimulationSettings(NetManager m)
         {
             m.SimulateLatency = SimulateLatency;
@@ -249,8 +265,32 @@ namespace GameAct.Les
             if (peer.Tag == null)
                 peer.Tag = abstractPeer;
 
-            ServerEm.AddPlayer(abstractPeer);
-            // 玩家 Pawn/HumanController 下一步再迁入 LES；当前只注册 NetPlayer 以打通传输
+            var netPlayer = ServerEm.AddPlayer(abstractPeer);
+            if (netPlayer == null)
+            {
+                Log("AddPlayer failed (max players?)");
+                peer.Disconnect();
+                return;
+            }
+
+            var spawn = FindDefaultSpawn();
+            var pawn = ServerEm.AddEntity<ActPlayer>(e =>
+            {
+                e.Spawn(spawn);
+                e.SetDriveLocally(false);
+            });
+            ServerEm.AddController<ActPlayerController>(netPlayer, pawn);
+            Log($"Spawned remote ActPlayer id={pawn.Id} for {join.UserName}");
+        }
+
+        static Vector3 FindDefaultSpawn()
+        {
+            var t = GameObject.Find("PlayerSpawn");
+            if (t != null) return t.transform.position;
+            var origin = new Vector3(0f, 50f, 0f);
+            if (Physics.Raycast(origin, Vector3.down, out var hit, 200f))
+                return hit.point + Vector3.up * 0.05f;
+            return new Vector3(0f, 0.05f, 0f);
         }
 
         void EnsureViewRoot(string levelScene)

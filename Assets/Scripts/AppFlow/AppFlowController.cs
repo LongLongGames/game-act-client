@@ -10,6 +10,7 @@ using GameAct.UI;
 using GameAct.Steam;
 using GameAct.Net;
 using GameAct.Gameplay;
+using GameAct.Les;
 
 namespace GameAct.AppFlow
 {
@@ -302,36 +303,8 @@ namespace GameAct.AppFlow
 
         async UniTask EnsureGameplayNetworkAsync(SessionMode mode)
         {
-            switch (mode)
-            {
-                case SessionMode.Solo:
-                    // 运行时零 LiteNet：已 Disconnect，Role=None，NetRunner 不 Poll
-                    return;
-
-                case SessionMode.Host:
-                    if (_net == null)
-                        throw new InvalidOperationException("网络会话未注册");
-                    if (_net.IsConnected && _net.Role == NetRole.Host)
-                        return;
-                    _loading?.SetStatus("正在启动 Host…");
-                    var hostOk = await _net.StartHostAsync(9050);
-                    if (!hostOk)
-                        throw new InvalidOperationException("LiteNetLib Host 启动失败");
-                    return;
-
-                case SessionMode.Client:
-                    if (_net == null)
-                        throw new InvalidOperationException("网络会话未注册");
-                    // 正式联机：此处应 Connect（Steam Lobby Data / SteamP2P）。
-                    // 当前未接 Client 连接 → 明确失败，禁止静默 LocalSimulation。
-                    if (!_net.IsConnected || _net.Role != NetRole.Client)
-                        throw new InvalidOperationException(
-                            "多人客户端尚未连接 Host（SteamP2P / 地址交换未接入）");
-                    return;
-
-                default:
-                    throw new InvalidOperationException("未知 SessionMode: " + mode);
-            }
+            // LES Transport：Solo 断网；Host 起 ServerEM+UDP；Client 从 Lobby 连 Host
+            await LesNetworkGate.EnsureAsync(_net, _steam, mode, _loading);
         }
 
         async UniTask<Scene> LoadLevelSceneAsync(string sceneName)

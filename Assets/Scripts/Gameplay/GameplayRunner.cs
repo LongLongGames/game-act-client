@@ -1,79 +1,75 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.InputSystem;
 using GameAct.AppFlow;
-using GameAct.Gameplay.Simulation;
 using GameAct.Gameplay.Player;
 using GameAct.Net;
 using GameAct.Les;
+using GameAct.Les.Shared;
 
 namespace GameAct.Gameplay
 {
     /// <summary>
-    /// 玩家仍走 IGameSimulation；敌人走 LES（Solo 离线 / Host 联机权威）。
+    /// LES 主路径：Input → ActPlayer 积分 → View 只跟位姿（无 CharacterController）。
     /// </summary>
     [DefaultExecutionOrder(0)]
     public class GameplayRunner : MonoBehaviour
     {
-        IGameSimulation _sim;
         INetSession _net;
         SessionMode _mode = SessionMode.Solo;
         PlayerView _localView;
-        int _localId = -1;
         bool _started;
         string _levelSceneName = "Map1";
         LesAuthoritySession _lesSolo;
+        ActPlayer _lesLocalPlayer;
 
-        public IGameSimulation Simulation => _sim;
-        public string LevelSceneName => _levelSceneName;
         public SessionMode Mode => _mode;
         public bool IsStarted => _started;
+        public ActPlayer LesLocalPlayer => _lesLocalPlayer;
 
         public void StartSession(INetSession net, string levelSceneName, SessionMode mode)
         {
             if (_started)
             {
-                Debug.LogWarning("[Gameplay] StartSession ignored: already started. Call StopSession first.");
+                Debug.LogWarning("[Gameplay] already started");
                 return;
             }
 
             _net = net;
             _mode = mode;
             _levelSceneName = string.IsNullOrEmpty(levelSceneName) ? "Map1" : levelSceneName;
-
             EnsureLevelActive(_levelSceneName);
-            _sim = CreateSimulation(mode, net);
 
             var spawnPos = SnapToGround(FindSpawnPosition());
-            _localId = _sim.SpawnPlayer(spawnPos, isLocal: true);
 
-            _localView = CreatePlayerView(_localId, isLocal: true);
-            MoveToLevelScene(_localView.gameObject, _levelSceneName);
-            _localView.transform.position = spawnPos;
-            spawnPos = SnapToGround(_localView.transform.position);
-            _localView.transform.position = spawnPos;
-
-            if (_sim is LocalSimulation local)
-                local.BindCharacterController(_localId, _localView.CharacterController);
-            else if (_sim is ClientSimulation client)
-                client.BindCharacterController(_localId, _localView.CharacterController);
-
-            _localView.EnableController();
-
-            // 敌人
             if (mode == SessionMode.Solo)
             {
                 _lesSolo = new LesAuthoritySession();
-                _lesSolo.Start(spawnPos, _levelSceneName, LesAuthoritySession.DefaultEnemyCount);
+                _lesSolo.Start(spawnPos, _levelSceneName);
+                _lesLocalPlayer = _lesSolo.LocalPlayer;
             }
             else if (mode == SessionMode.Host && net is LesNetworkHub hub)
             {
-                hub.SpawnEnemiesAround(spawnPos, _levelSceneName, LesNetworkHub.DefaultEnemyCount);
+                _lesLocalPlayer = hub.SpawnLocalPlayer(spawnPos);
+                hub.SpawnEnemiesAround(spawnPos, _levelSceneName);
             }
-            // Client：敌人由 LES 快照构造，LesNetworkHub.Poll → SyncEnemyViews
+            else if (mode == SessionMode.Client && net is LesNetworkHub)
+            {
+                _lesLocalPlayer = null;
+            }
+            else
+            {
+                throw new System.InvalidOperationException("无法启动 LES 会话: mode=" + mode);
+            }
+
+            _localView = CreatePlayerView(0, isLocal: true);
+            MoveToLevelScene(_localView.gameObject, _levelSceneName);
+            if (_lesLocalPlayer != null)
+                _localView.ApplyPose(_lesLocalPlayer.Position, _lesLocalPlayer.Yaw, 0f);
+            else
+                _localView.ApplyPose(spawnPos, 0f, 0f);
 
             _started = true;
-            Debug.Log($"[Gameplay] mode={mode} pos={spawnPos} net={net?.Role}");
+            Debug.Log($"[Gameplay] LES session mode={mode} spawn={spawnPos} (no CC)");
         }
 
         public void StartSession(INetSession net, string levelSceneName = "Map1")
@@ -88,37 +84,44 @@ namespace GameAct.Gameplay
         {
             _lesSolo?.Stop();
             _lesSolo = null;
-
-            if (_sim != null && _localId >= 0)
-                _sim.Despawn(_localId);
-            _localId = -1;
-
+            _lesLocalPlayer = null;
             if (_localView != null)
             {
                 Destroy(_localView.gameObject);
                 _localView = null;
             }
-
-            _sim = null;
             _net = null;
             _mode = SessionMode.Solo;
             _started = false;
         }
 
-        static IGameSimulation CreateSimulation(SessionMode mode, INetSession net)
+        void Update()
         {
-            switch (mode)
+            if (!_started) return;
+
+            _lesSolo?.Tick();
+
+            if (_lesLocalPlayer == null && _mode == SessionMode.Client && _net is LesNetworkHub hub)
+                _lesLocalPlayer = FindLocalClientPlayer(hub);
+
+            if (_lesLocalPlayer != null && !_lesLocalPlayer.IsDestroyed && _localView != null)
             {
-                case SessionMode.Solo:
-                case SessionMode.Host:
-                    return new LocalSimulation();
-                case SessionMode.Client:
-                    if (net == null || !net.IsConnected || net.Role != NetRole.Client)
-                        throw new System.InvalidOperationException("Client 未连接");
-                    return new ClientSimulation();
-                default:
-                    return new LocalSimulation();
+                var v = _lesLocalPlayer.Velocity;
+                float speedXZ = new Vector2(v.x, v.z).magnitude;
+                _localView.ApplyPose(_lesLocalPlayer.Position, _lesLocalPlayer.Yaw, speedXZ);
             }
+        }
+
+        static ActPlayer FindLocalClientPlayer(LesNetworkHub hub)
+        {
+            var em = hub.ClientEm;
+            if (em == null) return null;
+            foreach (var p in em.GetEntities<ActPlayer>())
+            {
+                if (p != null && !p.IsDestroyed && p.IsLocalControlled)
+                    return p;
+            }
+            return null;
         }
 
         public static void EnsureLevelActive(string sceneName)
@@ -150,12 +153,12 @@ namespace GameAct.Gameplay
 
         static Vector3 SnapToGround(Vector3 pos)
         {
-            var origin = pos + Vector3.up * 5f;
-            if (Physics.Raycast(origin, Vector3.down, out var hit, 20f, ~0, QueryTriggerInteraction.Ignore))
-                return hit.point + Vector3.up * 0.02f;
-            origin = pos + Vector3.up * 50f;
-            if (Physics.Raycast(origin, Vector3.down, out hit, 100f, ~0, QueryTriggerInteraction.Ignore))
-                return hit.point + Vector3.up * 0.02f;
+            var origin = pos + Vector3.up * 50f;
+            if (Physics.Raycast(origin, Vector3.down, out var hit, 100f, ~0, QueryTriggerInteraction.Ignore))
+                return hit.point + Vector3.up * 0.05f;
+            origin = pos + Vector3.up * 5f;
+            if (Physics.Raycast(origin, Vector3.down, out hit, 20f, ~0, QueryTriggerInteraction.Ignore))
+                return hit.point + Vector3.up * 0.05f;
             return new Vector3(pos.x, Mathf.Max(pos.y, 0.05f), pos.z);
         }
 
@@ -165,53 +168,6 @@ namespace GameAct.Gameplay
             var view = go.AddComponent<PlayerView>();
             view.Setup(entityId, isLocal);
             return view;
-        }
-
-        void Update()
-        {
-            if (!_started || _sim == null) return;
-
-            float dt = Time.deltaTime;
-            var input = ReadInput();
-            if (_localId >= 0)
-                _sim.ApplyInput(_localId, input);
-            _sim.Tick(dt);
-            if (_localView != null && _sim.TryGetPose(_localId, out var pose))
-                _localView.ApplyPose(pose);
-
-            // Solo 离线 LES；Host/Client 由 NetRunner → LesNetworkHub.Poll 驱动
-            _lesSolo?.Tick();
-        }
-
-        static PlayerInputCmd ReadInput()
-        {
-            float x = 0f, y = 0f;
-            bool sprint = false, jump = false;
-            var kb = Keyboard.current;
-            if (kb != null)
-            {
-                if (kb.aKey.isPressed || kb.leftArrowKey.isPressed) x -= 1f;
-                if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) x += 1f;
-                if (kb.sKey.isPressed || kb.downArrowKey.isPressed) y -= 1f;
-                if (kb.wKey.isPressed || kb.upArrowKey.isPressed) y += 1f;
-                sprint = kb.leftShiftKey.isPressed;
-                jump = kb.spaceKey.wasPressedThisFrame;
-            }
-            var pad = Gamepad.current;
-            if (pad != null)
-            {
-                var stick = pad.leftStick.ReadValue();
-                if (stick.sqrMagnitude > 0.01f) { x = stick.x; y = stick.y; }
-                if (pad.leftShoulder.isPressed || pad.leftStickButton.isPressed) sprint = true;
-                if (pad.buttonSouth.wasPressedThisFrame) jump = true;
-            }
-            return new PlayerInputCmd
-            {
-                Move = new Vector2(x, y),
-                Sprint = sprint,
-                Jump = jump,
-                Sequence = 0
-            };
         }
 
         void OnDestroy() => StopSession();

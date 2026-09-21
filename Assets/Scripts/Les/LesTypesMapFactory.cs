@@ -4,7 +4,6 @@ using GameAct.Les.Shared;
 
 namespace GameAct.Les
 {
-    /// <summary>Server/Client 共用类型表；hash 不一致则拒绝加入。</summary>
     public static class LesTypesMapFactory
     {
         public const int TickRate = 30;
@@ -27,7 +26,9 @@ namespace GameAct.Les
             EnsureFieldTypes();
             return new EntityTypesMap<GameEntities>()
                 .Register(GameEntities.Enemy, e => new ActEnemy(e))
-                .Register(GameEntities.EnemyBot, e => new EnemyBotController(e));
+                .Register(GameEntities.EnemyBot, e => new EnemyBotController(e))
+                .Register(GameEntities.Player, e => new ActPlayer(e))
+                .Register(GameEntities.PlayerController, e => new ActPlayerController(e));
         }
 
         public static ulong EvaluateHash() => Create().EvaluateEntityClassDataHash();

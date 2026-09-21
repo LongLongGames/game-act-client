@@ -1,33 +1,37 @@
 using UnityEngine;
-using GameAct.Gameplay.Simulation;
 
 namespace GameAct.Gameplay.Player
 {
     /// <summary>
-    /// 玩家表现：Y_Bot + 本地 CC。
-    /// Animator 不连 Transition，按速度 CrossFade 切 idle / walk。
+    /// 纯表现层：跟 LES / 模拟位姿，不做物理。
+    /// 不挂 CharacterController（参考 LES ClientPlayerView：只跟实体 Position）。
     /// </summary>
     public class PlayerView : MonoBehaviour
     {
         public int EntityId { get; set; } = -1;
         public bool IsLocal { get; private set; }
 
-        CharacterController _cc;
         Animator _anim;
         string _currentAnim;
         float _crossFade = 0.15f;
-        float _walkThreshold = 0.15f; // 水平速度超过则 walk
+        float _walkThreshold = 0.15f;
 
         const string AnimIdle = "idle";
         const string AnimWalk = "walk";
 
-        public CharacterController CharacterController => _cc;
+        /// <summary>兼容旧代码；始终为 null，禁止再绑 CC。</summary>
+        public CharacterController CharacterController => null;
 
         public void Setup(int entityId, bool isLocal)
         {
             EntityId = entityId;
             IsLocal = isLocal;
             name = isLocal ? "Player_Local" : $"Player_{entityId}";
+
+            // 若预制体上误挂了 CC，拆掉，避免和 LES 写 Transform 冲突
+            var existing = GetComponent<CharacterController>();
+            if (existing != null)
+                Destroy(existing);
 
             var model = LoadYBotModel();
             if (model != null)
@@ -43,42 +47,20 @@ namespace GameAct.Gameplay.Player
             }
             else
             {
-                Debug.LogError("[PlayerView] 未找到 Y_Bot.prefab。路径应为 Assets/Bundles/Character/Y_Bot.prefab");
+                Debug.LogError("[PlayerView] 未找到 Y_Bot.prefab");
             }
 
-            // 仅本地加 CC
-            if (isLocal)
-            {
-                _cc = gameObject.GetComponent<CharacterController>();
-                if (_cc == null) _cc = gameObject.AddComponent<CharacterController>();
-                _cc.height = 1.8f;
-                _cc.radius = 0.28f;
-                _cc.center = new Vector3(0f, 0.9f, 0f);
-                _cc.skinWidth = 0.08f;
-                _cc.minMoveDistance = 0f;
-                _cc.slopeLimit = 45f;
-                _cc.stepOffset = 0.3f;
-                _cc.enabled = false;
-            }
-
-            // 默认 idle（无连线，直接 Play）
             PlayAnim(AnimIdle, 0f);
         }
 
-        public void EnableController()
-        {
-            if (_cc != null) _cc.enabled = true;
-        }
+        /// <summary>空实现：保留 API，避免旧调用编译失败。</summary>
+        public void EnableController() { }
 
-        public void ApplyPose(in EntityPose pose)
+        public void ApplyPose(Vector3 position, float yawDegrees, float speedXZ = 0f)
         {
-            if (_cc != null && _cc.enabled && IsLocal)
-                transform.rotation = pose.Rotation;
-            else
-                transform.SetPositionAndRotation(pose.Position, pose.Rotation);
-
-            // 水平速度 → idle / walk，不依赖 Animator 连线
-            float speedXZ = new Vector2(pose.Velocity.x, pose.Velocity.z).magnitude;
+            transform.SetPositionAndRotation(
+                position,
+                Quaternion.Euler(0f, yawDegrees, 0f));
             UpdateLocomotion(speedXZ);
         }
 
@@ -91,7 +73,6 @@ namespace GameAct.Gameplay.Player
                 PlayAnim(AnimIdle, _crossFade);
         }
 
-        /// <summary>无 Transition 时用 CrossFade；同状态不重复切。</summary>
         void PlayAnim(string stateName, float fade)
         {
             if (_anim == null) return;
