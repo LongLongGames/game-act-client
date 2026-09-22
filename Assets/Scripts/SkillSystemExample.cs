@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;   // ← 加这行
 using GameAct.Spatial;
 
 namespace GameAct.Skill
@@ -75,11 +76,14 @@ namespace GameAct.Skill
                 OnHit = OnSkillHit
             };
 
-            if (Input.GetKeyDown(KeyCode.Alpha1)) _caster.TryCast(1, ctx); // Melee
-            if (Input.GetKeyDown(KeyCode.Alpha2)) _caster.TryCast(2, ctx); // Hitscan
-            if (Input.GetKeyDown(KeyCode.Alpha3)) _caster.TryCast(3, ctx); // Projectile
-            if (Input.GetKeyDown(KeyCode.Alpha4)) _caster.TryCast(4, ctx); // Delayed
-            if (Input.GetKeyDown(KeyCode.Alpha5)) _caster.TryCast(5, ctx); // Zone
+            var kb = Keyboard.current;
+            if (kb == null) return;
+
+            if (kb.digit1Key.wasPressedThisFrame) _caster.TryCast(1, ctx); // Melee
+            if (kb.digit2Key.wasPressedThisFrame) _caster.TryCast(2, ctx); // Hitscan
+            if (kb.digit3Key.wasPressedThisFrame) _caster.TryCast(3, ctx); // Projectile
+            if (kb.digit4Key.wasPressedThisFrame) _caster.TryCast(4, ctx); // Delayed
+            if (kb.digit5Key.wasPressedThisFrame) _caster.TryCast(5, ctx); // Zone
         }
 
         private void OnSkillHit(int casterId, HitResult hit, SkillDefine def)

@@ -424,6 +424,80 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 638160820}
   m_Mesh: {fileID: 10209, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!1 &852877956
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 852877959}
+  - component: {fileID: 852877958}
+  - component: {fileID: 852877957}
+  m_Layer: 0
+  m_Name: Test
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &852877957
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 852877956}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ebd80e4fd35d3c94e9b0994ac24ecd73, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: GameAct::GameAct.Spatial.SpatialDebugDrawer
+  useSectionManager: 0
+  drawAoi: 1
+  aoiCenter: {fileID: 0}
+  aoiRadius: 20
+  aoiLayerMask: -1
+  aoiColor: {r: 0, g: 1, b: 0.3, a: 0.25}
+  aoiResultColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+  drawHitboxes: 1
+  hitboxColor: {r: 1, g: 0.4, b: 0.1, a: 0.8}
+  selectedHitboxColor: {r: 0, g: 1, b: 1, a: 1}
+  drawGrid: 0
+  gridCellSize: 10
+  gridRange: 8
+  gridColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.4}
+  autoQueryEveryFrame: 1
+--- !u!114 &852877958
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 852877956}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f905c97d93dd6f54ab05dd1be1735691, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: GameAct::GameAct.Skill.SkillSystemExample
+  player: {fileID: 0}
+  debugDrawer: {fileID: 0}
+--- !u!4 &852877959
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 852877956}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &961739749
 GameObject:
   m_ObjectHideFlags: 0
@@ -599,3 +673,4 @@ SceneRoots:
   - {fileID: 961739753}
   - {fileID: 538219273}
   - {fileID: 452830726}
+  - {fileID: 852877959}

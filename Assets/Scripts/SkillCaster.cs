@@ -27,8 +27,10 @@ namespace GameAct.Skill
         {
             if (_skillMap.TryGetValue(skillId, out var skill))
             {
+                Debug.Log($"[SkillCaster] TryCast {skill.Define.Name} (id={skillId})");
                 return skill.TryCast(ctx);
             }
+            Debug.LogWarning($"[SkillCaster] TryCast failed for skill id={skillId}");
             return false;
         }
 
