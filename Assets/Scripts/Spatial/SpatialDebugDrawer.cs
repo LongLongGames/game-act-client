@@ -1,3 +1,4 @@
+using GameAct.Gameplay.Player;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -88,6 +89,33 @@ namespace GameAct.Spatial
             if (useSectionManager && _sectionManager != null)
                 return _sectionManager.ActiveSpatial;
             return _index;
+        }
+
+        // 在类里现有字段后面加
+        [Header("Auto Bind")]
+        [Tooltip("启动时若 aoiCenter 为空，自动找 Tag=Player")]
+        public bool autoFindPlayer = true;
+
+        // SpatialDebugDrawer 里把原来的 Awake 删掉，改成：
+        private void LateUpdate()
+        {
+            if (aoiCenter == null)
+            {
+                var views = FindObjectsOfType<PlayerView>();
+                foreach (var v in views)
+                {
+                    if (v != null && v.IsLocal)
+                    {
+                        aoiCenter = v.transform;
+                        break;
+                    }
+                }
+                if (aoiCenter == null)
+                {
+                    var go = GameObject.Find("Player_Local");
+                    if (go != null) aoiCenter = go.transform;
+                }
+            }
         }
 
         private void Update()

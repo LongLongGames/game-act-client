@@ -1,17 +1,14 @@
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.InputSystem;   // ← 加这行
+using UnityEngine.InputSystem;
 using GameAct.Spatial;
+using GameAct.Gameplay.Player;
 
 namespace GameAct.Skill
 {
-    /// <summary>
-    /// Minimal integration example.
-    /// Demonstrates: Spatial + HitSystem + SkillCaster + a few skill types.
-    /// </summary>
     public class SkillSystemExample : MonoBehaviour
     {
-        [Header("Refs")]
+        [Header("Refs（可空，运行时自动查找）")]
         public Transform player;
         public SpatialDebugDrawer debugDrawer;
 
@@ -19,18 +16,19 @@ namespace GameAct.Skill
         private IHitSystem _hitSystem;
         private SkillCaster _caster;
         private readonly Dictionary<int, AABB> _entityBounds = new Dictionary<int, AABB>();
+        private bool _bound;
 
         private void Start()
         {
-            // 1. Spatial
+            if (debugDrawer == null)
+                debugDrawer = FindObjectOfType<SpatialDebugDrawer>();
+
             _spatial = new SpatialHash(10f);
 
-            // 2. HitSystem wired to Spatial
             var hit = new HitSystem(_spatial);
             hit.GetEntityBounds = id => _entityBounds.TryGetValue(id, out var b) ? b : (AABB?)null;
             _hitSystem = hit;
 
-            // 3. Dummy targets
             for (int i = 1; i <= 20; i++)
             {
                 Vector3 pos = new Vector3(Random.Range(-15f, 15f), 0f, Random.Range(5f, 25f));
@@ -42,7 +40,6 @@ namespace GameAct.Skill
                     debugDrawer.SetEntityBounds(i, bounds);
             }
 
-            // 4. Player skills
             _caster = new SkillCaster();
             _caster.AddSkill(SkillDefine.CreateMelee("Slash", 2.8f, 15f));
             _caster.AddSkill(SkillDefine.CreateHitscan("Rail", 35f, 30f));
@@ -51,16 +48,20 @@ namespace GameAct.Skill
             _caster.AddSkill(SkillDefine.CreatePersistentZone("FireZone", 3.5f, 4f, 8f));
 
             if (debugDrawer != null)
-            {
                 debugDrawer.SetSpatialIndex(_spatial);
-                debugDrawer.aoiCenter = player != null ? player : transform;
-            }
 
-            Debug.Log("[SkillSystemExample] Ready. Press 1~5 to cast skills.");
+            Debug.Log("[SkillSystemExample] Ready. Waiting for Player_Local...");
         }
 
         private void Update()
         {
+            // 等 GameplayRunner 把 PlayerView 实例化出来再绑
+            if (!_bound)
+            {
+                TryBindPlayer();
+                if (!_bound) return;
+            }
+
             float dt = Time.deltaTime;
             _caster.Tick(dt);
 
@@ -79,11 +80,42 @@ namespace GameAct.Skill
             var kb = Keyboard.current;
             if (kb == null) return;
 
-            if (kb.digit1Key.wasPressedThisFrame) _caster.TryCast(1, ctx); // Melee
-            if (kb.digit2Key.wasPressedThisFrame) _caster.TryCast(2, ctx); // Hitscan
-            if (kb.digit3Key.wasPressedThisFrame) _caster.TryCast(3, ctx); // Projectile
-            if (kb.digit4Key.wasPressedThisFrame) _caster.TryCast(4, ctx); // Delayed
-            if (kb.digit5Key.wasPressedThisFrame) _caster.TryCast(5, ctx); // Zone
+            if (kb.digit1Key.wasPressedThisFrame) _caster.TryCast(1, ctx);
+            if (kb.digit2Key.wasPressedThisFrame) _caster.TryCast(2, ctx);
+            if (kb.digit3Key.wasPressedThisFrame) _caster.TryCast(3, ctx);
+            if (kb.digit4Key.wasPressedThisFrame) _caster.TryCast(4, ctx);
+            if (kb.digit5Key.wasPressedThisFrame) _caster.TryCast(5, ctx);
+        }
+
+        private void TryBindPlayer()
+        {
+            if (player == null)
+            {
+                var views = FindObjectsOfType<PlayerView>();
+                foreach (var v in views)
+                {
+                    if (v != null && v.IsLocal)
+                    {
+                        player = v.transform;
+                        break;
+                    }
+                }
+
+                if (player == null)
+                {
+                    var go = GameObject.Find("Player_Local");
+                    if (go != null) player = go.transform;
+                }
+            }
+
+            if (player == null) return;
+
+            _bound = true;
+
+            if (debugDrawer != null)
+                debugDrawer.aoiCenter = player;
+
+            Debug.Log($"[SkillSystemExample] Bound to {player.name}");
         }
 
         private void OnSkillHit(int casterId, HitResult hit, SkillDefine def)
