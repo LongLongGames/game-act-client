@@ -17,6 +17,8 @@ namespace GameAct.Net
         Udp,
         /// <summary>Steam P2P（正式联机）。</summary>
         SteamP2P,
+        /// <summary>Unity Relay（正式联机）。</summary>
+        UnityRelay,
         /// <summary>进程内 loopback（同进程 Server+LocalClient，不经 socket）。预留。</summary>
         InProcess
     }
