@@ -67,6 +67,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 69efb44cad697db4db3106b4e775deb0, type: 3}
       insertIndex: -1
       addedObject: {fileID: 5192549508118939403}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 69efb44cad697db4db3106b4e775deb0, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: -5143199115387489879}
   m_SourcePrefab: {fileID: 100100000, guid: 69efb44cad697db4db3106b4e775deb0, type: 3}
 --- !u!1 &2335338152425390412 stripped
 GameObject:
@@ -95,3 +98,26 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
+--- !u!114 &-5143199115387489879
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2335338152425390412}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e3a8d0612c599c848bf4bd226ef0c713, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: GameAct::GameAct.Spatial.LogicColliderAuthoring
+  Colliders:
+  - Name: Body
+    Shape: 0
+    CenterOffset: {x: 0, y: 0.9, z: 0}
+    Size: {x: 0.5, y: 1.8, z: 0.3}
+    Radius: 0.4
+    Height: 2
+    Direction: 1
+  drawGizmos: 1
+  gizmoColor: {r: 0.2, g: 0.8, b: 1, a: 0.8}
+  selectedColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
