@@ -75,10 +75,15 @@ namespace GameAct.Bootstrap
             runners.AddComponent<SteamRunner>().Bind(steam);
             runners.AddComponent<NetRunner>().Bind(net);
 
+            // 断线确认框（DontDestroyOnLoad，全屏模态）
+            var dialogGo = new GameObject("ConfirmDialog");
+            DontDestroyOnLoad(dialogGo);
+            var dialog = dialogGo.AddComponent<RuntimeConfirmDialog>();
+
             var flow = new AppFlowController(
                 version, auth, player, http,
                 login, mainMenu, lobby, room, settings,
-                loading, hud, steam, net, config);
+                loading, hud, steam, net, config, dialog);
             flow.StartAsync().Forget();
         }
 

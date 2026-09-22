@@ -449,6 +449,8 @@ namespace GameAct.Les
                 IsConnected = false;
                 StatusText = "Disconnected: " + reason;
                 ClientEm = null;
+                _steamServerPeer = null;
+                Role = NetRole.None;
                 OnDisconnected?.Invoke();
             }
             else if (Role == NetRole.Host && ServerEm != null)
@@ -699,6 +701,13 @@ namespace GameAct.Les
                 IsConnected = false;
                 StatusText = "Disconnected: " + disconnectInfo.Reason;
                 ClientEm = null;
+                _serverPeer = null;
+                if (_manager != null)
+                {
+                    _manager.Stop();
+                    _manager = null;
+                }
+                Role = NetRole.None;
                 OnDisconnected?.Invoke();
             }
             else

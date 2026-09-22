@@ -37,8 +37,10 @@ namespace GameAct.AppFlow
         readonly ISteamService _steam;
         readonly INetSession _net;
         readonly ApiConfig _config;
+        readonly IConfirmDialog _dialog;
 
         bool _unauthorizedHandling;
+        bool _handlingDisconnect;
         bool _isRoomHost;
         bool _gameStarting;
         string _pendingLevelName = "Map1";
@@ -66,7 +68,8 @@ namespace GameAct.AppFlow
             IGameHudView hud = null,
             ISteamService steam = null,
             INetSession net = null,
-            ApiConfig config = null)
+            ApiConfig config = null,
+            IConfirmDialog dialog = null)
         {
             _version = version;
             _auth = auth;
@@ -82,6 +85,7 @@ namespace GameAct.AppFlow
             _steam = steam;
             _net = net;
             _config = config ?? new ApiConfig();
+            _dialog = dialog;
         }
 
         public async UniTask StartAsync(CancellationToken ct = default)
@@ -140,6 +144,9 @@ namespace GameAct.AppFlow
                 _steam.OnLobbyMembersChanged += RefreshWaitingMembers;
                 _steam.OnLobbyEntered += _ => RefreshWaitingMembers();
             }
+
+            if (_net != null)
+                _net.OnDisconnected += HandleNetworkDisconnected;
 
             InitSteam();
             LoadSettingsPrefs();
@@ -848,5 +855,79 @@ namespace GameAct.AppFlow
             PlayerPrefs.SetInt("set_vsync", _vsyncIndex);
             PlayerPrefs.Save();
         }
+
+        // ─── 局内断线：确认框 → 回房间/大厅 ─────────────────
+
+        /// <summary>
+        /// 局内网络断开入口。Solo / 非 Gameplay / 进局中 忽略。
+        /// </summary>
+        void HandleNetworkDisconnected()
+        {
+            if (_handlingDisconnect) return;
+            if (State != AppState.Gameplay) return;
+            if (_gameStarting) return;
+
+            _handlingDisconnect = true;
+            HandleNetworkDisconnectedAsync().Forget();
+        }
+
+        async UniTaskVoid HandleNetworkDisconnectedAsync()
+        {
+            try
+            {
+                Debug.Log("[AppFlow] Network disconnected during Gameplay → dialog → Room/Lobby");
+
+                StopExistingGameplay();
+                _net?.Disconnect();
+
+                var level = string.IsNullOrEmpty(_pendingLevelName) ? "Map1" : _pendingLevelName;
+                await UnloadLevelIfLoadedAsync(level);
+
+                bool stillInLobby = _steam != null && _steam.CurrentLobbyId != 0;
+
+                string title = "连接已断开";
+                string body = stillInLobby
+                    ? (_isRoomHost
+                        ? "网络已断开。点击确定返回房间，可再次开始游戏。"
+                        : "与主机的连接已断开。点击确定返回房间，可等待房主再次开始或重新加入。")
+                    : "连接已断开，当前房间已失效。点击确定返回大厅。";
+
+                if (_dialog != null)
+                    await _dialog.ShowAsync(title, body, "确定");
+                else
+                    Debug.LogWarning("[AppFlow] IConfirmDialog 未注入，断线仅用 status");
+
+                if (stillInLobby)
+                {
+                    ShowOnlyRoom();
+                    RefreshWaitingMembers();
+                    _room.SetStatus(body);
+                    _hud?.SetStatus(title);
+                    State = AppState.Home;
+                }
+                else
+                {
+                    _isRoomHost = false;
+                    ShowOnlyLobby();
+                    _lobby.SetStatus("连接已断开 · 房间已失效，请重新创建或加入");
+                    HandleRefreshLobby().Forget();
+                    State = AppState.Home;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[AppFlow] HandleNetworkDisconnected failed: " + e);
+                _isRoomHost = false;
+                ShowOnlyMainMenu();
+                _mainMenu.SetStatus("连接已断开");
+                State = AppState.Home;
+            }
+            finally
+            {
+                _handlingDisconnect = false;
+            }
+        }
+
+
     }
 }

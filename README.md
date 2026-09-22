@@ -75,7 +75,7 @@
 - [x] Steamworks 接入（Lobby / 邀请 / P2P）
 - [x] LiteNetLib 客户端（Host / Join / 官服连接）
 - [x] 重连功能和引导
-- [ ] 基础 StateSync 与玩家移动预测
+- [x] 基础 StateSync 与玩家移动预测（靠LES默认机制支持）
 
 ### Phase 2 – 战斗核心（4~6 周）
 - [ ] Boss / 普通怪基础表现
