@@ -72,16 +72,17 @@
 脚本入口：`Assets/Scripts/`（Network / Auth / Services / AppFlow / UI / Bootstrap / DI）
 
 ### Phase 1 – 联机基础（3~5 周）
-- [ ] Steamworks 接入（Lobby / 邀请 / P2P）
-- [ ] LiteNetLib 客户端（Host / Join / 官服连接）
+- [x] Steamworks 接入（Lobby / 邀请 / P2P）
+- [x] LiteNetLib 客户端（Host / Join / 官服连接）
+- [x] 重连功能和引导
 - [ ] 基础 StateSync 与玩家移动预测
-- [ ] 单机剧情模式可通关（进度上报服务器）
 
 ### Phase 2 – 战斗核心（4~6 周）
-- [ ] 技能系统 + 客户端表现
-- [ ] AOI 分层接收与远景群演
-- [ ] 玩家预测 / 回滚实现
 - [ ] Boss / 普通怪基础表现
+- [ ] 玩家预测 / 回滚实现
+- [ ] AOI 分层接收与远景群演
+- [ ] 技能系统 + 客户端表现
+- [ ] 单机剧情模式可通关（进度上报服务器）
 
 ### Phase 3 – 内容与打磨（持续）
 - [ ] 秘境 / Build / UI / 成就

@@ -23,9 +23,9 @@
 - [ ] 战斗：伤害、技能 RPC、受击
 - [ ] 投射物 `AddPredictedEntity`
 - [ ] 物理命中 + LagCompensation
-- [ ] Steam P2P 替换 UDP
 - [ ] SyncGroup / AOI
-- [ ] 断线重连与版本不一致 UI
+- [x] Steam P2P 替换 UDP
+- [x] 断线重连与版本不一致 UI
 
 ## 合入注意
 
