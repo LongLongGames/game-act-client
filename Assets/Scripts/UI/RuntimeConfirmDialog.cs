@@ -168,7 +168,7 @@ namespace GameAct.UI
             var go = new GameObject(name);
             go.transform.SetParent(parent, false);
             var t = go.AddComponent<Text>();
-            t.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            t.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             t.fontSize = size;
             t.fontStyle = style;
             t.color = Color.white;
@@ -196,7 +196,7 @@ namespace GameAct.UI
             var textGo = new GameObject("Text");
             textGo.transform.SetParent(go.transform, false);
             label = textGo.AddComponent<Text>();
-            label.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             label.fontSize = 20;
             label.alignment = TextAnchor.MiddleCenter;
             label.color = Color.white;
