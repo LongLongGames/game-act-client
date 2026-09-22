@@ -397,17 +397,38 @@ namespace GameAct.AppFlow
 
         // ─── Boot / Login / Home ────────────────────────────
 
+        /// <summary>启动时尝试一次；失败不阻塞，登录页可手动重试。</summary>
         void InitSteam()
+        {
+            TryEnsureSteamAndRefreshLoginUi(showStatus: false);
+        }
+
+        /// <summary>
+        /// 手动触发：若尚未 Init 则再调一次 SteamAPI.Init。
+        /// 无轮询；仅在进入 Login / 点击「进入游戏」时调用。
+        /// </summary>
+        bool TryEnsureSteamAndRefreshLoginUi(bool showStatus)
         {
             if (_steam == null)
             {
                 _login.SetSteamMode(false, null);
-                return;
+                if (showStatus)
+                    _login.SetStatus("无 Steam 服务，请使用开发登录");
+                return false;
             }
-            if (_steam.Init())
+
+            if (_steam.IsInitialized || _steam.Init())
+            {
                 _login.SetSteamMode(true, _steam.PersonaName);
-            else
-                _login.SetSteamMode(false, null);
+                if (showStatus)
+                    _login.SetStatus("点击「进入游戏」");
+                return true;
+            }
+
+            _login.SetSteamMode(false, null);
+            if (showStatus)
+                _login.SetStatus("Steam 未就绪：请先启动 Steam 客户端，再点「进入游戏」重试");
+            return false;
         }
 
         void OnUnauthorized()
@@ -431,13 +452,11 @@ namespace GameAct.AppFlow
                     break;
                 case AppState.Login:
                     ShowOnlyLogin();
-                    if (_steam != null && _steam.IsInitialized)
-                        _login.SetSteamMode(true, _steam.PersonaName);
+                    // 进入登录页再尝试一次（启动时 Steam 未开、此时已开的情况）
+                    if (TryEnsureSteamAndRefreshLoginUi(showStatus: false))
+                        _login.SetStatus("点击「进入游戏」");
                     else
-                        _login.SetSteamMode(false, null);
-                    _login.SetStatus(_steam != null && _steam.IsInitialized
-                        ? "点击「进入游戏」"
-                        : "Steam 未就绪，可使用开发登录");
+                        _login.SetStatus("Steam 未就绪：启动 Steam 后点「进入游戏」即可重试，或使用开发登录");
                     _login.SetInteractable(true);
                     break;
                 case AppState.Home:
@@ -470,11 +489,10 @@ namespace GameAct.AppFlow
 
         async void HandleSteamEnterClicked()
         {
-            if (_steam == null || !_steam.IsInitialized)
-            {
-                _login.SetStatus("Steam 未初始化");
+            // 手动重试 Init：先开游戏再开 Steam 时，点一次即可，无需重启客户端
+            if (!TryEnsureSteamAndRefreshLoginUi(showStatus: true))
                 return;
-            }
+
             _login.SetInteractable(false);
             _login.SetStatus("Steam 登录中…");
             try

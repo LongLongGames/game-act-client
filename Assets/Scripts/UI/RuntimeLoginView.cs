@@ -6,6 +6,7 @@ namespace GameAct.UI
 {
     /// <summary>
     /// 正式：Steam 一键进入；开发：官方账号密码（改名保留联调）。
+    /// Steam 未就绪时「进入游戏」仍可点，由 AppFlow 在点击时手动重试 Init。
     /// </summary>
     public class RuntimeLoginView : MonoBehaviour, ILoginView
     {
@@ -76,7 +77,7 @@ namespace GameAct.UI
             var st = _status.GetComponent<RectTransform>();
             if (st != null) st.sizeDelta = new Vector2(420, 40);
 
-            // 默认先显示开发（Steam 未就绪时）；Steam 就绪后由 SetSteamMode 切换
+            // 默认未就绪文案；按钮保持可点以便手动重试 Init
             SetSteamMode(false, null);
             _root.SetActive(false);
         }
@@ -116,14 +117,16 @@ namespace GameAct.UI
                     _steamHint.text = string.IsNullOrEmpty(steamPersona)
                         ? "Steam 已连接 · 点击进入"
                         : $"以 {steamPersona} 进入";
+                // 就绪：正常可点（登录流程里会再 SetInteractable）
                 if (_steamBtn != null) _steamBtn.interactable = true;
             }
             else
             {
                 if (_title != null) _title.text = "game-act（Steam 未就绪）";
                 if (_steamHint != null)
-                    _steamHint.text = "请启动 Steam 客户端，或使用下方开发登录";
-                if (_steamBtn != null) _steamBtn.interactable = false;
+                    _steamHint.text = "请启动 Steam，再点下方按钮重试";
+                // 未就绪也保持可点：点击时由 AppFlow 手动重试 Init（无轮询）
+                if (_steamBtn != null) _steamBtn.interactable = true;
             }
         }
 
