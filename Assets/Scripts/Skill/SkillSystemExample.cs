@@ -17,6 +17,7 @@ namespace GameAct.Skill
         private SkillCaster _caster;
         private readonly Dictionary<int, AABB> _entityBounds = new Dictionary<int, AABB>();
         private bool _bound;
+        private PlayerView _playerView;
 
         private void Start()
         {
@@ -78,9 +79,19 @@ namespace GameAct.Skill
             };
 
             var kb = Keyboard.current;
+            var mouse = Mouse.current;
+
+            // 左键 / 数字1：近战 + 攻击动画 Trigger
+            bool fireMelee = (kb != null && kb.digit1Key.wasPressedThisFrame)
+                             || (mouse != null && mouse.leftButton.wasPressedThisFrame);
+            if (fireMelee)
+            {
+                _playerView?.TriggerAttack();
+                _caster.TryCast(1, ctx);
+            }
+
             if (kb == null) return;
 
-            if (kb.digit1Key.wasPressedThisFrame) _caster.TryCast(1, ctx);
             if (kb.digit2Key.wasPressedThisFrame) _caster.TryCast(2, ctx);
             if (kb.digit3Key.wasPressedThisFrame) _caster.TryCast(3, ctx);
             if (kb.digit4Key.wasPressedThisFrame) _caster.TryCast(4, ctx);
@@ -97,6 +108,7 @@ namespace GameAct.Skill
                     if (v != null && v.IsLocal)
                     {
                         player = v.transform;
+                        _playerView = v;
                         break;
                     }
                 }
@@ -104,8 +116,17 @@ namespace GameAct.Skill
                 if (player == null)
                 {
                     var go = GameObject.Find("Player_Local");
-                    if (go != null) player = go.transform;
+                    if (go != null)
+                    {
+                        player = go.transform;
+                        _playerView = go.GetComponent<PlayerView>();
+                    }
                 }
+            }
+            else if (_playerView == null)
+            {
+                _playerView = player.GetComponent<PlayerView>()
+                              ?? player.GetComponentInParent<PlayerView>();
             }
 
             if (player == null) return;

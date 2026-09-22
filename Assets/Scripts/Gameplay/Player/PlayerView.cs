@@ -5,6 +5,7 @@ namespace GameAct.Gameplay.Player
     /// <summary>
     /// 纯表现层：跟 LES / 模拟位姿，不做物理。
     /// 不挂 CharacterController（参考 LES ClientPlayerView：只跟实体 Position）。
+    /// 待机/移动由 Animator float「Movement」驱动；攻击由 Trigger「Attack」切换。
     /// </summary>
     public class PlayerView : MonoBehaviour
     {
@@ -12,12 +13,10 @@ namespace GameAct.Gameplay.Player
         public bool IsLocal { get; private set; }
 
         Animator _anim;
-        string _currentAnim;
-        float _crossFade = 0.15f;
         float _walkThreshold = 0.15f;
 
-        const string AnimIdle = "idle";
-        const string AnimWalk = "walk";
+        static readonly int MovementHash = Animator.StringToHash("Movement");
+        static readonly int AttackHash = Animator.StringToHash("Attack");
 
         /// <summary>兼容旧代码；始终为 null，禁止再绑 CC。</summary>
         public CharacterController CharacterController => null;
@@ -44,13 +43,13 @@ namespace GameAct.Gameplay.Player
                 _anim = model.GetComponentInChildren<Animator>();
                 if (_anim == null)
                     Debug.LogWarning("[PlayerView] Y_Bot 上未找到 Animator");
+                else
+                    _anim.SetFloat(MovementHash, 0f);
             }
             else
             {
                 Debug.LogError("[PlayerView] 未找到 Y_Bot.prefab");
             }
-
-            PlayAnim(AnimIdle, 0f);
         }
 
         /// <summary>空实现：保留 API，避免旧调用编译失败。</summary>
@@ -67,21 +66,16 @@ namespace GameAct.Gameplay.Player
         void UpdateLocomotion(float speedXZ)
         {
             if (_anim == null) return;
-            if (speedXZ >= _walkThreshold)
-                PlayAnim(AnimWalk, _crossFade);
-            else
-                PlayAnim(AnimIdle, _crossFade);
+            // Movement: 0 = idle, >= threshold → walk（由 Animator 过渡条件控制）
+            float movement = speedXZ >= _walkThreshold ? 1f : 0f;
+            _anim.SetFloat(MovementHash, movement);
         }
 
-        void PlayAnim(string stateName, float fade)
+        /// <summary>触发一次攻击动画（Animator Trigger「Attack」）。</summary>
+        public void TriggerAttack()
         {
             if (_anim == null) return;
-            if (_currentAnim == stateName) return;
-            _currentAnim = stateName;
-            if (fade <= 0f)
-                _anim.Play(stateName, 0, 0f);
-            else
-                _anim.CrossFade(stateName, fade, 0);
+            _anim.SetTrigger(AttackHash);
         }
 
         static GameObject LoadYBotModel()
