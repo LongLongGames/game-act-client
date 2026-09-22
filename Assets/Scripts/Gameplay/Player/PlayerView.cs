@@ -5,7 +5,9 @@ namespace GameAct.Gameplay.Player
     /// <summary>
     /// 纯表现层：跟 LES / 模拟位姿，不做物理。
     /// 不挂 CharacterController（参考 LES ClientPlayerView：只跟实体 Position）。
-    /// 待机/移动由 Animator float「Movement」驱动；攻击由 Trigger「Attack」切换。
+    /// 待机/走/跑由 Animator 1D BlendTree「Movement」驱动：
+    ///   0 = idle, 1 = walk, 2 = run（Shift 冲刺）。
+    /// 攻击由 Trigger「Attack」切换。
     /// </summary>
     public class PlayerView : MonoBehaviour
     {
@@ -13,7 +15,11 @@ namespace GameAct.Gameplay.Player
         public bool IsLocal { get; private set; }
 
         Animator _anim;
-        float _walkThreshold = 0.15f;
+
+        /// <summary>与 ActPlayer 对齐，用于把水平速度映射到 Movement 0 / 1 / 2。</summary>
+        const float WalkSpeedRef = 5.5f;
+        const float SprintSpeedRef = 8.5f;
+        const float IdleCutoff = 0.15f;
 
         static readonly int MovementHash = Animator.StringToHash("Movement");
         static readonly int AttackHash = Animator.StringToHash("Attack");
@@ -66,9 +72,28 @@ namespace GameAct.Gameplay.Player
         void UpdateLocomotion(float speedXZ)
         {
             if (_anim == null) return;
-            // Movement: 0 = idle, >= threshold → walk（由 Animator 过渡条件控制）
-            float movement = speedXZ >= _walkThreshold ? 1f : 0f;
-            _anim.SetFloat(MovementHash, movement);
+
+            // BlendTree thresholds: 0=idle, 1=walk, 2=run
+            // 速度映射：
+            //   [0, IdleCutoff)           → 0
+            //   [IdleCutoff, WalkSpeed]   → 0 → 1
+            //   (WalkSpeed, SprintSpeed]  → 1 → 2
+            float movement;
+            if (speedXZ < IdleCutoff)
+            {
+                movement = 0f;
+            }
+            else if (speedXZ <= WalkSpeedRef)
+            {
+                movement = Mathf.Clamp01(speedXZ / WalkSpeedRef); // 0..1
+            }
+            else
+            {
+                float t = Mathf.Clamp01((speedXZ - WalkSpeedRef) / (SprintSpeedRef - WalkSpeedRef));
+                movement = 1f + t; // 1..2
+            }
+
+            _anim.SetFloat(MovementHash, movement, 0.1f, Time.deltaTime);
         }
 
         /// <summary>触发一次攻击动画（Animator Trigger「Attack」）。</summary>
