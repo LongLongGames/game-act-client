@@ -36,5 +36,13 @@ namespace GameAct.Skill
         public int? TargetEntityId;         // optional locked target
         public IHitSystem HitSystem;
         public System.Action<int, HitResult, SkillDefine> OnHit;  // callback: targetId, hit, skillDef
+
+        /// <summary>
+        /// 本次施法击退距离（米）。由 SkillCaster 在构建 ctx 时写入：
+        /// skill.KnockbackDistance ≥ 0 用技能值，否则用 Caster.KnockbackDistance。
+        /// OnHit 侧把该值传给 HitReceiver.ApplyKnockback。
+        /// 后期与 Monster 体重挂钩时，此值仍是「输出端」；目标端再乘抗性（Boss/大型 = 0）。
+        /// </summary>
+        public float KnockbackDistance;
     }
 }

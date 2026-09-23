@@ -987,6 +987,11 @@ MonoBehaviour:
   CurrentHp: 100
   HitFlashColor: {r: 1, g: 0, b: 0, a: 1}
   FlashDuration: 0.15
+  TargetRenderers: []
+  CanBeKnockedBack: 1
+  KnockbackResistance: 1
+  Weight: 1
+  KnockbackDuration: 0.3
 --- !u!1 &2369779142621926756
 GameObject:
   m_ObjectHideFlags: 0

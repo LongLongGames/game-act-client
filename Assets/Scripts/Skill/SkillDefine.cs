@@ -73,6 +73,16 @@ namespace GameAct.Skill
         public float BaseDamage = 10f;
         public float DamageInterval = 0.5f;
 
+        [Header("Knockback")]
+        /// <summary>
+        /// 技能级击退距离（米）。
+        /// &lt; 0：使用 SkillCaster.KnockbackDistance；
+        /// = 0：本技能不击退；
+        /// &gt; 0：覆盖 Caster 默认值。
+        /// 后期与目标体重挂钩时，此值仍是「施法者输出」，实际位移再乘目标抗性。
+        /// </summary>
+        public float KnockbackDistance = -1f;
+
         [Header("Layers")]
         public SpatialLayer TargetLayers = SpatialLayer.Ground | SpatialLayer.LowAerial;
 
@@ -120,7 +130,8 @@ namespace GameAct.Skill
                 Cooldown = 0.6f,
                 AnimFps = animFps,
                 HitFrame = hitFrame,
-                HitWindowFrames = hitWindowFrames
+                HitWindowFrames = hitWindowFrames,
+                KnockbackDistance = -1f // 用 Caster 默认
             };
         }
 
@@ -134,7 +145,8 @@ namespace GameAct.Skill
                 Range = range,
                 BaseDamage = damage,
                 MaxTargets = 1,
-                Cooldown = 0.8f
+                Cooldown = 0.8f,
+                KnockbackDistance = 0.6f // 射线略轻
             };
         }
 
@@ -150,7 +162,8 @@ namespace GameAct.Skill
                 Range = 40f,
                 BaseDamage = damage,
                 Duration = 3f,
-                Cooldown = 1.2f
+                Cooldown = 1.2f,
+                KnockbackDistance = 1.0f
             };
         }
 
@@ -165,7 +178,8 @@ namespace GameAct.Skill
                 CastTime = delay,
                 BaseDamage = damage,
                 Shape = SkillShape.Sphere,
-                Cooldown = 5f
+                Cooldown = 5f,
+                KnockbackDistance = 1.5f // 陨石类稍重
             };
         }
 
@@ -181,7 +195,8 @@ namespace GameAct.Skill
                 DamageInterval = 0.5f,
                 BaseDamage = tickDamage,
                 Shape = SkillShape.Sphere,
-                Cooldown = 8f
+                Cooldown = 8f,
+                KnockbackDistance = 0f // 持续圈默认不击退
             };
         }
     }

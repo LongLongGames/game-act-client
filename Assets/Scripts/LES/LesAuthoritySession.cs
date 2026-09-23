@@ -49,9 +49,10 @@ namespace GameAct.Les
                 e.SetDriveLocally(true);
             });
 
-                        SpawnMonstersInternal(center, monsterCount, baseRadius: 6f);
+            SpawnMonstersInternal(center, monsterCount, baseRadius: 6f);
 
             MonsterDeathService.AuthorityDestroyMonster = DestroyMonsterById;
+            MonsterKnockbackService.AuthorityKnockback = KnockbackMonsterById;
             _started = true;
             Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={MonsterCount}");
         }
@@ -138,9 +139,27 @@ namespace GameAct.Les
             }
         }
 
+        /// <summary>
+        /// 权威击退：改 ActMonster 位置。View 下帧 Apply 会跟上。
+        /// Boss/大型怪后期可在 ActMonster.ApplyKnockback 或此处按体重短路。
+        /// </summary>
+        void KnockbackMonsterById(int entityId, Vector3 worldDir, float distance)
+        {
+            if (_em == null || distance <= 0.001f) return;
+            foreach (var monster in _em.GetEntities<ActMonster>())
+            {
+                if (monster == null || monster.IsDestroyed || monster.IsDead) continue;
+                if (monster.Id != entityId) continue;
+                monster.ApplyKnockback(worldDir, distance);
+                Debug.Log($"[LES] ActMonster knockback id={entityId} dist={distance:F2}");
+                break;
+            }
+        }
+
         public void Stop()
         {
             MonsterDeathService.Clear();
+            MonsterKnockbackService.Clear();
             _localPlayer = null;
             for (int i = 0; i < _views.Count; i++)
                 if (_views[i] != null) UnityEngine.Object.Destroy(_views[i].gameObject);

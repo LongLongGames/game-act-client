@@ -19,6 +19,10 @@ namespace GameAct.Skill
         public bool ShowAlwaysPreview = true;
         public float CastGizmoDuration = 0.7f;
 
+        [Header("Knockback（Caster 可调）")]
+        [Tooltip("玩家默认击退距离（米）。技能 Define.KnockbackDistance≥0 时优先用技能值。后期与 Monster 体重挂钩。")]
+        public float DefaultKnockbackDistance = 1.2f;
+
         ISpatialIndex _spatial;
         IHitSystem _hitSystem;
         SkillCaster _caster;
@@ -82,6 +86,7 @@ namespace GameAct.Skill
             _defZone = SkillDefine.CreatePersistentZone("FireZone", 3.5f, 4f, 8f);
 
             _caster = new SkillCaster();
+            _caster.KnockbackDistance = DefaultKnockbackDistance;
             _caster.AddSkill(_defMelee);
             _caster.AddSkill(_defHitscan);
             _caster.AddSkill(_defProjectile);
@@ -91,7 +96,8 @@ namespace GameAct.Skill
             if (debugDrawer != null)
                 debugDrawer.SetSpatialIndex(_spatial);
 
-            Debug.Log("[PlayerCombatDriver] systems ready (1 Melee / 2 Rail / 3 Fireball / 4 Meteor / 5 Zone)");
+            Debug.Log("[PlayerCombatDriver] systems ready (1 Melee / 2 Rail / 3 Fireball / 4 Meteor / 5 Zone) " +
+                      $"Knockback={DefaultKnockbackDistance:F2}");
         }
 
         public void Bind(PlayerView view, int casterEntityId)
@@ -100,6 +106,9 @@ namespace GameAct.Skill
             _playerView = view;
             _casterEntityId = casterEntityId;
             _ready = view != null;
+
+            if (_caster != null)
+                _caster.KnockbackDistance = DefaultKnockbackDistance;
 
             if (debugDrawer != null && view != null)
                 debugDrawer.aoiCenter = view.transform;
@@ -121,6 +130,9 @@ namespace GameAct.Skill
             if (!_ready || _playerView == null || _caster == null)
                 return;
 
+            // Inspector 运行时改 DefaultKnockbackDistance 可即时生效
+            _caster.KnockbackDistance = DefaultKnockbackDistance;
+
             CombatTargetRegistry.SyncToSpatial(_spatial);
             float dt = Time.deltaTime;
             _caster.Tick(dt);
@@ -135,6 +147,7 @@ namespace GameAct.Skill
             else
                 fwd.Normalize();
 
+            // KnockbackDistance 在每次 Cast 前按技能解析写入 ctx
             var ctx = new SkillCastContext
             {
                 CasterEntityId = _casterEntityId,
@@ -142,7 +155,8 @@ namespace GameAct.Skill
                 CasterForward = fwd,
                 TargetPosition = pos + fwd * 10f,
                 HitSystem = _hitSystem,
-                OnHit = OnSkillHit
+                OnHit = OnSkillHit,
+                KnockbackDistance = 0f // 下面按技能覆盖
             };
 
             var kb = Keyboard.current;
@@ -150,21 +164,41 @@ namespace GameAct.Skill
 
             bool fireMelee = (kb != null && kb.digit1Key.wasPressedThisFrame)
                              || (mouse != null && mouse.leftButton.wasPressedThisFrame);
-            if (fireMelee && _caster.TryCast(1, ctx))
+            if (fireMelee)
             {
-                _playerView.TriggerAttack();
-                CaptureGizmo(1, pos, fwd, _defMelee);
+                ctx.KnockbackDistance = _caster.ResolveKnockback(_defMelee);
+                if (_caster.TryCast(1, ctx))
+                {
+                    _playerView.TriggerAttack();
+                    CaptureGizmo(1, pos, fwd, _defMelee);
+                }
             }
 
             if (kb == null) return;
-            if (kb.digit2Key.wasPressedThisFrame && _caster.TryCast(2, ctx))
-                CaptureGizmo(2, pos, fwd, _defHitscan);
-            if (kb.digit3Key.wasPressedThisFrame && _caster.TryCast(3, ctx))
-                CaptureGizmo(3, pos, fwd, _defProjectile);
-            if (kb.digit4Key.wasPressedThisFrame && _caster.TryCast(4, ctx))
-                CaptureGizmo(4, pos, fwd, _defMeteor);
-            if (kb.digit5Key.wasPressedThisFrame && _caster.TryCast(5, ctx))
-                CaptureGizmo(5, pos, fwd, _defZone);
+            if (kb.digit2Key.wasPressedThisFrame)
+            {
+                ctx.KnockbackDistance = _caster.ResolveKnockback(_defHitscan);
+                if (_caster.TryCast(2, ctx))
+                    CaptureGizmo(2, pos, fwd, _defHitscan);
+            }
+            if (kb.digit3Key.wasPressedThisFrame)
+            {
+                ctx.KnockbackDistance = _caster.ResolveKnockback(_defProjectile);
+                if (_caster.TryCast(3, ctx))
+                    CaptureGizmo(3, pos, fwd, _defProjectile);
+            }
+            if (kb.digit4Key.wasPressedThisFrame)
+            {
+                ctx.KnockbackDistance = _caster.ResolveKnockback(_defMeteor);
+                if (_caster.TryCast(4, ctx))
+                    CaptureGizmo(4, pos, fwd, _defMeteor);
+            }
+            if (kb.digit5Key.wasPressedThisFrame)
+            {
+                ctx.KnockbackDistance = _caster.ResolveKnockback(_defZone);
+                if (_caster.TryCast(5, ctx))
+                    CaptureGizmo(5, pos, fwd, _defZone);
+            }
         }
 
         void CaptureGizmo(int skillId, Vector3 origin, Vector3 forward, SkillDefine def)
@@ -202,11 +236,26 @@ namespace GameAct.Skill
             }
         }
 
-        static void OnSkillHit(int casterId, HitResult hit, SkillDefine def)
+        void OnSkillHit(int casterId, HitResult hit, SkillDefine def)
         {
             Debug.Log($"[PlayerCombat] Skill={def.Name} Target={hit.TargetEntityId} Dist={hit.Distance:F1} Dmg={def.BaseDamage}");
-            if (CombatTargetRegistry.TryGetReceiver(hit.TargetEntityId, out var receiver) && receiver != null)
-                receiver.OnHit(hit, def);
+            if (!CombatTargetRegistry.TryGetReceiver(hit.TargetEntityId, out var receiver) || receiver == null)
+                return;
+
+            receiver.OnHit(hit, def);
+
+            // 击退：方向优先 caster→target，否则用 CasterForward
+            float kbDist = 0f;
+            if (_caster != null)
+                kbDist = _caster.ResolveKnockback(def);
+            if (kbDist <= 0f) return;
+
+            Vector3 from = _playerView != null ? _playerView.transform.position : hit.HitPoint;
+            Vector3 dir = receiver.transform.position - from;
+            dir.y = 0f;
+            if (dir.sqrMagnitude < 1e-6f && _playerView != null)
+                dir = _playerView.transform.forward;
+            receiver.ApplyKnockback(dir, kbDist);
         }
 
         void OnDrawGizmos()

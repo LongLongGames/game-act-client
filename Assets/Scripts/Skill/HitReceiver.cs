@@ -6,6 +6,7 @@ namespace GameAct.Skill
 {
     /// <summary>
     /// 命中闪色：优先驱动 HitFlashLit._HitAmount；结束时 ClearPropertyBlock，避免 residual 把模型染黑。
+    /// 击退：走 MonsterKnockbackService 改权威 ActMonster 位置（只改 transform 会被 LES 每帧覆盖）。
     /// </summary>
     [RequireComponent(typeof(LogicCollider))]
     public class HitReceiver : MonoBehaviour
@@ -31,6 +32,27 @@ namespace GameAct.Skill
         public Color HitFlashColor = new Color(1f, 0.2f, 0.12f, 1f);
         public float FlashDuration = 0.12f;
         public Renderer[] TargetRenderers;
+
+        [Header("Knockback（目标端）")]
+        /// <summary>
+        /// 是否可被击退。
+        /// 后期：Boss / 大型怪设为 false，或由体重表驱动（Weight ≥ 阈值 → 免疫）。
+        /// ZomBunny 等普通怪保持 true。
+        /// </summary>
+        public bool CanBeKnockedBack = true;
+
+        /// <summary>
+        /// 击退抗性系数 [0,1]。实际位移 = 输入距离 × (1 - KnockbackResistance)。
+        /// 后期可改为 f(体重)：轻型 0、中型 0.3、重型 0.7、Boss 1.0。
+        /// </summary>
+        [Range(0f, 1f)]
+        public float KnockbackResistance = 0f;
+
+        /// <summary>
+        /// 体重占位（后期与 Monster 表挂钩）。
+        /// 当前不参与计算，仅预留；Boss/大型怪可设很大并配合 CanBeKnockedBack=false。
+        /// </summary>
+        public float Weight = 1f;
 
         float _flashTimer;
         MaterialPropertyBlock _mpb;
@@ -96,6 +118,46 @@ namespace GameAct.Skill
 
             if (CurrentHp <= 0f)
                 BeginDeath();
+        }
+
+        /// <summary>
+        /// 应用击退。
+        /// direction：击退方向（会归一化并压平到 XZ）；distance：施法端输出距离（米）。
+        ///
+        /// 实现要点：LES 每帧用 ActMonster.Position 覆盖 View.transform，
+        /// 因此必须通过 MonsterKnockbackService 改权威位置，不能只改 transform。
+        ///
+        /// 后期设计（保留说明）：
+        /// - 实际距离 = distance × (1 - KnockbackResistance)；
+        /// - Boss / 大型怪：CanBeKnockedBack=false 短路；
+        /// - Weight 由表驱动抗性与免疫。
+        /// </summary>
+        public void ApplyKnockback(Vector3 direction, float distance)
+        {
+            if (IsDead) return;
+            if (distance <= 0f) return;
+
+            // Boss / 大型怪：无法击退（后期由体重或配置写死）
+            if (!CanBeKnockedBack)
+            {
+                Debug.Log($"[HitReceiver] Entity={EntityId} 免疫击退 (CanBeKnockedBack=false, Weight={Weight})");
+                return;
+            }
+
+            float resist = Mathf.Clamp01(KnockbackResistance);
+            float finalDist = distance * (1f - resist);
+            if (finalDist <= 0.001f) return;
+
+            Vector3 dir = direction;
+            dir.y = 0f;
+            if (dir.sqrMagnitude < 1e-8f)
+                dir = transform.forward;
+            dir.Normalize();
+
+            // 权威：改 ActMonster（Solo/Host 已注册回调）
+            MonsterKnockbackService.RequestKnockback(EntityId, dir, finalDist);
+
+            Debug.Log($"[HitReceiver] Entity={EntityId} Knockback request dist={finalDist:F2} (in={distance:F2} resist={resist:F2})");
         }
 
         void BeginDeath()

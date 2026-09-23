@@ -50,6 +50,23 @@ namespace GameAct.Les.Shared
             _yaw.Value = yawDegrees;
         }
 
+        /// <summary>
+        /// 权威击退：直接改 SyncVar 位置，View 下一帧 Apply 即可看到位移。
+        /// 仅在 Host/Solo 权威端调用；纯客户端改 transform 会被 LES 位姿覆盖。
+        /// 后期：Boss/大型怪可在入口短路（体重表 / 标记免疫）。
+        /// </summary>
+        public void ApplyKnockback(Vector3 worldDir, float distance)
+        {
+            if (_dead || distance <= 0.001f) return;
+
+            worldDir.y = 0f;
+            if (worldDir.sqrMagnitude < 1e-8f) return;
+            worldDir.Normalize();
+
+            var next = _position.Value + worldDir * distance;
+            _position.Value = SnapToGround(next);
+        }
+
         protected override void Update()
         {
             base.Update();
