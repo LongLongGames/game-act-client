@@ -91,6 +91,35 @@ namespace GameAct.Skill
             }
         }
 
+
+        /// <summary>
+        /// 在 maxRange 内找最近存活目标（XZ 距离）。excludeEntityId 排除自己。
+        /// 用于平A 自动索敌。
+        /// </summary>
+        public static bool TryFindNearest(Vector3 origin, float maxRange, int excludeEntityId, out Entry nearest)
+        {
+            nearest = default;
+            float bestSq = maxRange * maxRange;
+            bool found = false;
+            foreach (var kv in _map)
+            {
+                if (kv.Key == excludeEntityId) continue;
+                var e = kv.Value;
+                if (e.Receiver == null || !e.Receiver.gameObject.activeInHierarchy) continue;
+                if (e.Receiver.IsDead) continue;
+                var t = e.Transform;
+                if (t == null) continue;
+                float dx = t.position.x - origin.x;
+                float dz = t.position.z - origin.z;
+                float sq = dx * dx + dz * dz;
+                if (sq > bestSq) continue;
+                bestSq = sq;
+                nearest = e;
+                found = true;
+            }
+            return found;
+        }
+
         public static void Clear() => _map.Clear();
 
         public static int CountAlive()

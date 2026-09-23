@@ -10,6 +10,7 @@ namespace GameAct.Les.Shared
     /// - 鼠标控制「视线 / 相机 Yaw」（Input.Rotation）
     /// - WASD 相对视线方向移动
     /// - 角色模型朝向移动方向转身（有转向速度），按 A/S/D 会转过去
+    /// - 平A 索敌时 RequestFaceDirection：身体优先转向目标，持续 FaceHold 秒
     /// </summary>
     public class ActPlayer : PawnLogic
     {
@@ -19,6 +20,8 @@ namespace GameAct.Les.Shared
         const float JumpSpeed = 7.5f;
         /// <summary>角色转向移动方向的角速度（度/秒）。</summary>
         const float TurnSpeed = 720f;
+        /// <summary>平A 索敌转向角速度（度/秒），略快一点手感更跟手。</summary>
+        const float FaceTurnSpeed = 900f;
 
         [SyncVarFlags(SyncFlags.Interpolated | SyncFlags.LagCompensated)]
         SyncVar<Vector3> _position;
@@ -34,6 +37,10 @@ namespace GameAct.Les.Shared
 
         /// <summary>上一帧的视线 Yaw（来自鼠标，本地相机用，不单独同步）。</summary>
         float _lookYaw;
+
+        // 平A 索敌：强制身体朝向
+        float _faceTargetYaw;
+        float _faceHoldLeft;
 
         public Vector3 Position => _position.Value;
         /// <summary>身体朝向（模型）。</summary>
@@ -58,11 +65,24 @@ namespace GameAct.Les.Shared
             _lookYaw = 0f;
             _velocity = Vector3.zero;
             _grounded = true;
+            _faceHoldLeft = 0f;
         }
 
         public void SetDriveLocally(bool on) => _driveLocally = on;
 
         public void SetInput(in ActPlayerInput cmd) => _cmd = cmd;
+
+        /// <summary>
+        /// 平A / 技能索敌：身体转向 worldDir（XZ），在 holdSeconds 内优先于移动转向。
+        /// 由 PlayerCombatDriver 在命中索敌后调用。
+        /// </summary>
+        public void RequestFaceDirection(Vector3 worldDir, float holdSeconds = 0.35f)
+        {
+            worldDir.y = 0f;
+            if (worldDir.sqrMagnitude < 1e-6f) return;
+            _faceTargetYaw = Mathf.Atan2(worldDir.x, worldDir.z) * Mathf.Rad2Deg;
+            _faceHoldLeft = Mathf.Max(0.05f, holdSeconds);
+        }
 
         protected override void Update()
         {
@@ -94,13 +114,20 @@ namespace GameAct.Les.Shared
             _velocity.x = wish.x;
             _velocity.z = wish.z;
 
-            // 有移动时：身体转向移动方向（A/S/D 会转身）
-            // 无移动时：保持当前身体朝向
-            float wishHorizSq = wish.x * wish.x + wish.z * wish.z;
-            if (wishHorizSq > 0.001f)
+            // 身体朝向：平A 索敌优先，其次有移动时朝移动方向
+            if (_faceHoldLeft > 0f)
             {
-                float targetYaw = Mathf.Atan2(wish.x, wish.z) * Mathf.Rad2Deg;
-                _yaw.Value = Mathf.MoveTowardsAngle(_yaw.Value, targetYaw, TurnSpeed * dt);
+                _faceHoldLeft -= dt;
+                _yaw.Value = Mathf.MoveTowardsAngle(_yaw.Value, _faceTargetYaw, FaceTurnSpeed * dt);
+            }
+            else
+            {
+                float wishHorizSq = wish.x * wish.x + wish.z * wish.z;
+                if (wishHorizSq > 0.001f)
+                {
+                    float targetYaw = Mathf.Atan2(wish.x, wish.z) * Mathf.Rad2Deg;
+                    _yaw.Value = Mathf.MoveTowardsAngle(_yaw.Value, targetYaw, TurnSpeed * dt);
+                }
             }
 
             if (_grounded && _cmd.Jump)

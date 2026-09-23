@@ -2,13 +2,13 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using GameAct.Spatial;
 using GameAct.Gameplay.Player;
+using GameAct.Les.Shared;
 
 namespace GameAct.Skill
 {
     /// <summary>
     /// 正式战斗入口：本地玩家 SkillCaster + CombatTargetRegistry 命中。
-    /// 由 GameplayRunner 在会话启动后 Bind(PlayerView, entityId)。
-    /// Gizmo 也画在这里（Scene 视图打开 Gizmos；不依赖 SkillSystemExample）。
+    /// 平A：范围内自动索敌最近目标，CasterForward / 身体朝向对齐目标。
     /// </summary>
     public class PlayerCombatDriver : MonoBehaviour
     {
@@ -20,13 +20,21 @@ namespace GameAct.Skill
         public float CastGizmoDuration = 0.7f;
 
         [Header("Knockback（Caster 可调）")]
-        [Tooltip("玩家默认击退距离（米）。技能 Define.KnockbackDistance≥0 时优先用技能值。后期与 Monster 体重挂钩。")]
+        [Tooltip("玩家默认击退距离（米）。技能 Define.KnockbackDistance≥0 时优先用技能值。")]
         public float DefaultKnockbackDistance = 1.2f;
+
+        [Header("平A 自动索敌")]
+        [Tooltip("索敌半径（米）。建议略大于近战 Range，无目标则保持当前朝向出招。")]
+        public float AutoTargetRange = 4.5f;
+
+        [Tooltip("索敌后身体强制朝向目标的保持时间（秒）。")]
+        public float FaceHoldSeconds = 0.4f;
 
         ISpatialIndex _spatial;
         IHitSystem _hitSystem;
         SkillCaster _caster;
         PlayerView _playerView;
+        ActPlayer _pawn;
         int _casterEntityId;
         bool _ready;
 
@@ -96,15 +104,21 @@ namespace GameAct.Skill
             if (debugDrawer != null)
                 debugDrawer.SetSpatialIndex(_spatial);
 
-            Debug.Log("[PlayerCombatDriver] systems ready (1 Melee / 2 Rail / 3 Fireball / 4 Meteor / 5 Zone) " +
-                      $"Knockback={DefaultKnockbackDistance:F2}");
+            Debug.Log("[PlayerCombatDriver] systems ready (1 Melee auto-target / 2 Rail / 3 Fireball / 4 Meteor / 5 Zone) " +
+                      $"AutoTargetRange={AutoTargetRange:F1}");
         }
 
         public void Bind(PlayerView view, int casterEntityId)
         {
+            Bind(view, casterEntityId, null);
+        }
+
+        public void Bind(PlayerView view, int casterEntityId, ActPlayer pawn)
+        {
             EnsureSystems();
             _playerView = view;
             _casterEntityId = casterEntityId;
+            _pawn = pawn;
             _ready = view != null;
 
             if (_caster != null)
@@ -114,13 +128,14 @@ namespace GameAct.Skill
                 debugDrawer.aoiCenter = view.transform;
 
             Debug.Log(_ready
-                ? $"[PlayerCombatDriver] Bound view={view.name} entityId={casterEntityId}"
+                ? $"[PlayerCombatDriver] Bound view={view.name} entityId={casterEntityId} pawn={(pawn != null)}"
                 : "[PlayerCombatDriver] Bind failed: null PlayerView");
         }
 
         public void Unbind()
         {
             _playerView = null;
+            _pawn = null;
             _casterEntityId = 0;
             _ready = false;
         }
@@ -130,7 +145,6 @@ namespace GameAct.Skill
             if (!_ready || _playerView == null || _caster == null)
                 return;
 
-            // Inspector 运行时改 DefaultKnockbackDistance 可即时生效
             _caster.KnockbackDistance = DefaultKnockbackDistance;
 
             CombatTargetRegistry.SyncToSpatial(_spatial);
@@ -147,7 +161,6 @@ namespace GameAct.Skill
             else
                 fwd.Normalize();
 
-            // KnockbackDistance 在每次 Cast 前按技能解析写入 ctx
             var ctx = new SkillCastContext
             {
                 CasterEntityId = _casterEntityId,
@@ -156,7 +169,7 @@ namespace GameAct.Skill
                 TargetPosition = pos + fwd * 10f,
                 HitSystem = _hitSystem,
                 OnHit = OnSkillHit,
-                KnockbackDistance = 0f // 下面按技能覆盖
+                KnockbackDistance = 0f
             };
 
             var kb = Keyboard.current;
@@ -166,6 +179,24 @@ namespace GameAct.Skill
                              || (mouse != null && mouse.leftButton.wasPressedThisFrame);
             if (fireMelee)
             {
+                // 范围内自动索敌最近 → 改 CasterForward + 身体转向
+                if (TryAutoTarget(pos, AutoTargetRange, out var aimDir, out var targetId, out var targetPos))
+                {
+                    fwd = aimDir;
+                    ctx.CasterForward = fwd;
+                    ctx.TargetPosition = targetPos;
+                    ctx.TargetEntityId = targetId;
+                    _pawn?.RequestFaceDirection(aimDir, FaceHoldSeconds);
+                    // View 立即给一点转向反馈（权威 yaw 下一 tick 会跟上）
+                    if (_playerView != null)
+                    {
+                        float yaw = Mathf.Atan2(aimDir.x, aimDir.z) * Mathf.Rad2Deg;
+                        var e = _playerView.transform.eulerAngles;
+                        e.y = yaw;
+                        _playerView.transform.rotation = Quaternion.Euler(e);
+                    }
+                }
+
                 ctx.KnockbackDistance = _caster.ResolveKnockback(_defMelee);
                 if (_caster.TryCast(1, ctx))
                 {
@@ -199,6 +230,29 @@ namespace GameAct.Skill
                 if (_caster.TryCast(5, ctx))
                     CaptureGizmo(5, pos, fwd, _defZone);
             }
+        }
+
+        /// <summary>
+        /// 在 range 内找最近可命中目标，返回水平朝向与目标点。
+        /// </summary>
+        bool TryAutoTarget(Vector3 origin, float range, out Vector3 aimDir, out int targetId, out Vector3 targetPos)
+        {
+            aimDir = Vector3.forward;
+            targetId = -1;
+            targetPos = origin;
+            if (!CombatTargetRegistry.TryFindNearest(origin, range, _casterEntityId, out var entry))
+                return false;
+            if (entry.Transform == null)
+                return false;
+
+            targetPos = entry.Transform.position;
+            targetId = entry.EntityId;
+            Vector3 d = targetPos - origin;
+            d.y = 0f;
+            if (d.sqrMagnitude < 1e-6f)
+                return false;
+            aimDir = d.normalized;
+            return true;
         }
 
         void CaptureGizmo(int skillId, Vector3 origin, Vector3 forward, SkillDefine def)
@@ -244,7 +298,6 @@ namespace GameAct.Skill
 
             receiver.OnHit(hit, def);
 
-            // 击退：方向优先 caster→target，否则用 CasterForward
             float kbDist = 0f;
             if (_caster != null)
                 kbDist = _caster.ResolveKnockback(def);
@@ -270,6 +323,10 @@ namespace GameAct.Skill
 
             if (ShowAlwaysPreview)
             {
+                // 索敌圈
+                Gizmos.color = new Color(0.2f, 1f, 0.4f, 0.25f);
+                DrawWireCircle(origin, AutoTargetRange);
+
                 DrawMelee(origin, fwd, _defMelee != null ? _defMelee.Range : 2.8f,
                     new Color(1f, 0.55f, 0.1f, 0.12f), new Color(1f, 0.55f, 0.1f, 0.45f));
 

@@ -92,7 +92,7 @@ namespace GameAct.Gameplay
             if (_combatDriver == null)
                 _combatDriver = GetComponent<PlayerCombatDriver>()
                                 ?? gameObject.AddComponent<PlayerCombatDriver>();
-            _combatDriver.Bind(_localView, entityId);
+            _combatDriver.Bind(_localView, entityId, _lesLocalPlayer);
         }
 
         public void StartSession(INetSession net, string levelSceneName = "Map1")
