@@ -1,6 +1,5 @@
 // Assets/Scripts/Skill/SkillSystemExample.cs
-// 仅负责：玩家技能输入 + 命中 CombatTargetRegistry（LES 怪 / Debug 刷怪）。
-// 已删除：自动刷 Dummy（请用 F12 → Combat/spawn_monster）。
+// 技能输入 + CombatTargetRegistry；Gizmo：1 近战 / 2 射线 / 3 弹道 / 4 落雷区 / 5 持续圈
 using UnityEngine;
 using UnityEngine.InputSystem;
 using GameAct.Spatial;
@@ -14,17 +13,29 @@ namespace GameAct.Skill
         public Transform player;
         public SpatialDebugDrawer debugDrawer;
 
+        [Header("Gizmo")]
+        public bool ShowAlwaysPreview = true;
+        public float CastGizmoDuration = 0.7f;
+
         ISpatialIndex _spatial;
         IHitSystem _hitSystem;
         SkillCaster _caster;
         bool _bound;
         PlayerView _playerView;
 
-        float _lastMeleeRange;
-        Vector3 _lastMeleeCenter;
-        Vector3 _lastMeleeForward;
-        float _lastMeleeRadius;
+        int _lastSkillId;
         float _gizmoShowTime;
+        Vector3 _gizmoOrigin;
+        Vector3 _gizmoForward;
+        Vector3 _gizmoTarget;
+        float _gizmoRange;
+        float _gizmoRadius;
+
+        SkillDefine _defMelee;
+        SkillDefine _defHitscan;
+        SkillDefine _defProjectile;
+        SkillDefine _defMeteor;
+        SkillDefine _defZone;
 
         void Start()
         {
@@ -36,17 +47,23 @@ namespace GameAct.Skill
             hit.GetEntityBounds = id => CombatTargetRegistry.GetBounds(id);
             _hitSystem = hit;
 
+            _defMelee = SkillDefine.CreateMelee("Slash", 2.8f, 15f);
+            _defHitscan = SkillDefine.CreateHitscan("Rail", 35f, 30f);
+            _defProjectile = SkillDefine.CreateProjectile("Fireball", 16f, 22f);
+            _defMeteor = SkillDefine.CreateDelayedArea("Meteor", 4.5f, 1.0f, 50f);
+            _defZone = SkillDefine.CreatePersistentZone("FireZone", 3.5f, 4f, 8f);
+
             _caster = new SkillCaster();
-            _caster.AddSkill(SkillDefine.CreateMelee("Slash", 2.8f, 15f));
-            _caster.AddSkill(SkillDefine.CreateHitscan("Rail", 35f, 30f));
-            _caster.AddSkill(SkillDefine.CreateProjectile("Fireball", 16f, 22f));
-            _caster.AddSkill(SkillDefine.CreateDelayedArea("Meteor", 4.5f, 1.0f, 50f));
-            _caster.AddSkill(SkillDefine.CreatePersistentZone("FireZone", 3.5f, 4f, 8f));
+            _caster.AddSkill(_defMelee);
+            _caster.AddSkill(_defHitscan);
+            _caster.AddSkill(_defProjectile);
+            _caster.AddSkill(_defMeteor);
+            _caster.AddSkill(_defZone);
 
             if (debugDrawer != null)
                 debugDrawer.SetSpatialIndex(_spatial);
 
-            Debug.Log("[SkillSystemExample] Ready. Targets=CombatTargetRegistry. Spawn via F12 spawn_monster.");
+            Debug.Log("[SkillSystemExample] Gizmo: 1 Melee / 2 Ray / 3 Projectile / 4 Area / 5 Zone");
         }
 
         void Update()
@@ -57,7 +74,6 @@ namespace GameAct.Skill
                 if (!_bound) return;
             }
 
-            // 施法前把 Registry 同步进 Spatial（含 LES 怪位移） Debug 刷的怪）
             CombatTargetRegistry.SyncToSpatial(_spatial);
 
             float dt = Time.deltaTime;
@@ -65,12 +81,19 @@ namespace GameAct.Skill
 
             if (player == null) return;
 
+            Vector3 pos = player.position;
+            Vector3 fwd = player.forward;
+            if (fwd.sqrMagnitude < 1e-6f)
+                fwd = Vector3.forward;
+            else
+                fwd.Normalize();
+
             var ctx = new SkillCastContext
             {
                 CasterEntityId = 0,
-                CasterPosition = player.position,
-                CasterForward = player.forward,
-                TargetPosition = player.position + player.forward * 10f,
+                CasterPosition = pos,
+                CasterForward = fwd,
+                TargetPosition = pos + fwd * 10f,
                 HitSystem = _hitSystem,
                 OnHit = OnSkillHit
             };
@@ -84,25 +107,58 @@ namespace GameAct.Skill
             {
                 _playerView?.TriggerAttack();
                 if (_caster.TryCast(1, ctx))
-                {
-                    var def = SkillDefine.CreateMelee("Slash", 2.8f, 15f);
-                    _lastMeleeRange = def.Range;
-                    _lastMeleeCenter = player.position + player.forward.normalized * (def.Range * 0.5f);
-                    _lastMeleeForward = player.forward;
-                    _lastMeleeRadius = def.Range * 0.6f;
-                    _gizmoShowTime = 0.6f;
-                }
+                    CaptureGizmo(1, pos, fwd, _defMelee);
             }
 
-            if (kb == null) return;
-
-            if (kb.digit2Key.wasPressedThisFrame) _caster.TryCast(2, ctx);
-            if (kb.digit3Key.wasPressedThisFrame) _caster.TryCast(3, ctx);
-            if (kb.digit4Key.wasPressedThisFrame) _caster.TryCast(4, ctx);
-            if (kb.digit5Key.wasPressedThisFrame) _caster.TryCast(5, ctx);
+            if (kb != null)
+            {
+                if (kb.digit2Key.wasPressedThisFrame && _caster.TryCast(2, ctx))
+                    CaptureGizmo(2, pos, fwd, _defHitscan);
+                if (kb.digit3Key.wasPressedThisFrame && _caster.TryCast(3, ctx))
+                    CaptureGizmo(3, pos, fwd, _defProjectile);
+                if (kb.digit4Key.wasPressedThisFrame && _caster.TryCast(4, ctx))
+                    CaptureGizmo(4, pos, fwd, _defMeteor);
+                if (kb.digit5Key.wasPressedThisFrame && _caster.TryCast(5, ctx))
+                    CaptureGizmo(5, pos, fwd, _defZone);
+            }
 
             if (_gizmoShowTime > 0f)
                 _gizmoShowTime -= dt;
+        }
+
+        void CaptureGizmo(int skillId, Vector3 origin, Vector3 forward, SkillDefine def)
+        {
+            _lastSkillId = skillId;
+            _gizmoShowTime = CastGizmoDuration;
+            _gizmoOrigin = origin;
+            _gizmoForward = forward.sqrMagnitude > 1e-6f ? forward.normalized : Vector3.forward;
+            _gizmoRange = def.Range;
+            _gizmoTarget = origin + _gizmoForward * 10f;
+
+            switch (def.ExecType)
+            {
+                case SkillExecType.Melee:
+                    _gizmoRadius = def.Range * 0.6f;
+                    _gizmoTarget = origin + _gizmoForward * (def.Range * 0.5f);
+                    break;
+                case SkillExecType.Hitscan:
+                    _gizmoRadius = 0.15f;
+                    _gizmoTarget = origin + _gizmoForward * def.Range;
+                    break;
+                case SkillExecType.Projectile:
+                    _gizmoRadius = Mathf.Max(0.35f, def.ProjectileRadius);
+                    _gizmoTarget = origin + _gizmoForward * Mathf.Min(def.Range, 12f);
+                    break;
+                case SkillExecType.DelayedArea:
+                case SkillExecType.PersistentZone:
+                    _gizmoRadius = def.Range;
+                    _gizmoTarget = origin + _gizmoForward * Mathf.Clamp(def.Range * 1.2f, 4f, 14f);
+                    _gizmoTarget.y = origin.y;
+                    break;
+                default:
+                    _gizmoRadius = def.Range;
+                    break;
+            }
         }
 
         void TryBindPlayer()
@@ -119,7 +175,6 @@ namespace GameAct.Skill
                         break;
                     }
                 }
-
                 if (player == null)
                 {
                     var go = GameObject.Find("Player_Local");
@@ -137,18 +192,14 @@ namespace GameAct.Skill
             }
 
             if (player == null) return;
-
             _bound = true;
             if (debugDrawer != null)
                 debugDrawer.aoiCenter = player;
-
-            Debug.Log($"[SkillSystemExample] Bound to {player.name}");
         }
 
         void OnSkillHit(int casterId, HitResult hit, SkillDefine def)
         {
             Debug.Log($"[Hit] Skill={def.Name} Target={hit.TargetEntityId} Dist={hit.Distance:F1} Dmg={def.BaseDamage}");
-
             if (CombatTargetRegistry.TryGetReceiver(hit.TargetEntityId, out var receiver) && receiver != null)
                 receiver.OnHit(hit, def);
         }
@@ -157,23 +208,86 @@ namespace GameAct.Skill
         {
             if (player == null) return;
 
-            if (_gizmoShowTime > 0f)
+            if (ShowAlwaysPreview && Application.isPlaying)
             {
-                Gizmos.color = new Color(1f, 0.2f, 0.1f, 0.35f);
-                Gizmos.DrawSphere(_lastMeleeCenter, _lastMeleeRadius);
-                Gizmos.color = new Color(1f, 0.3f, 0.1f, 0.9f);
-                Gizmos.DrawWireSphere(_lastMeleeCenter, _lastMeleeRadius);
-                Gizmos.DrawLine(player.position, player.position + _lastMeleeForward * _lastMeleeRange);
+                Vector3 origin = player.position;
+                Vector3 fwd = player.forward;
+                if (fwd.sqrMagnitude < 1e-6f) fwd = Vector3.forward;
+                else fwd.Normalize();
+
+                DrawMelee(origin, fwd, _defMelee != null ? _defMelee.Range : 2.8f,
+                    new Color(1f, 0.55f, 0.1f, 0.12f), new Color(1f, 0.55f, 0.1f, 0.45f));
+
+                float rayLen = _defHitscan != null ? _defHitscan.Range : 35f;
+                Gizmos.color = new Color(0.3f, 0.85f, 1f, 0.35f);
+                Gizmos.DrawLine(origin + Vector3.up * 1.2f, origin + Vector3.up * 1.2f + fwd * Mathf.Min(rayLen, 20f));
+
+                float areaR = _defMeteor != null ? _defMeteor.Range : 4.5f;
+                Vector3 pred = origin + fwd * 8f;
+                pred.y = origin.y;
+                Gizmos.color = new Color(1f, 0.2f, 0.9f, 0.2f);
+                DrawWireCircle(pred, areaR * 0.5f);
             }
 
-            if (Application.isPlaying)
+            if (_gizmoShowTime <= 0f) return;
+
+            switch (_lastSkillId)
             {
-                float range = 2.8f;
-                Vector3 center = player.position + player.forward.normalized * (range * 0.5f);
-                Gizmos.color = new Color(1f, 0.6f, 0.1f, 0.15f);
-                Gizmos.DrawSphere(center, range * 0.6f);
-                Gizmos.color = new Color(1f, 0.6f, 0.1f, 0.6f);
-                Gizmos.DrawWireSphere(center, range * 0.6f);
+                case 1:
+                    DrawMelee(_gizmoOrigin, _gizmoForward, _gizmoRange,
+                        new Color(1f, 0.2f, 0.1f, 0.3f), new Color(1f, 0.3f, 0.1f, 0.9f));
+                    break;
+                case 2:
+                    Gizmos.color = new Color(0.2f, 0.9f, 1f, 0.95f);
+                    Gizmos.DrawLine(_gizmoOrigin + Vector3.up * 1.2f, _gizmoTarget + Vector3.up * 1.2f);
+                    Gizmos.DrawSphere(_gizmoTarget + Vector3.up * 1.2f, 0.2f);
+                    break;
+                case 3:
+                    Gizmos.color = new Color(1f, 0.85f, 0.1f, 0.9f);
+                    Gizmos.DrawLine(_gizmoOrigin + Vector3.up * 1.2f, _gizmoTarget + Vector3.up * 1.2f);
+                    Gizmos.DrawWireSphere(_gizmoTarget + Vector3.up * 1.2f, _gizmoRadius);
+                    Gizmos.color = new Color(1f, 0.85f, 0.1f, 0.25f);
+                    Gizmos.DrawSphere(_gizmoTarget + Vector3.up * 1.2f, _gizmoRadius);
+                    break;
+                case 4:
+                    Gizmos.color = new Color(1f, 0.15f, 0.8f, 0.85f);
+                    DrawWireCircle(_gizmoTarget, _gizmoRadius);
+                    Gizmos.color = new Color(1f, 0.15f, 0.8f, 0.22f);
+                    Gizmos.DrawSphere(_gizmoTarget + Vector3.up * 0.05f, _gizmoRadius);
+                    Gizmos.color = new Color(1f, 0.5f, 0.9f, 0.6f);
+                    Gizmos.DrawLine(_gizmoOrigin + Vector3.up, _gizmoTarget + Vector3.up);
+                    break;
+                case 5:
+                    Gizmos.color = new Color(1f, 0.4f, 0.05f, 0.9f);
+                    DrawWireCircle(_gizmoTarget, _gizmoRadius);
+                    Gizmos.color = new Color(1f, 0.35f, 0.05f, 0.2f);
+                    Gizmos.DrawSphere(_gizmoTarget + Vector3.up * 0.05f, _gizmoRadius);
+                    break;
+            }
+        }
+
+        static void DrawMelee(Vector3 origin, Vector3 forward, float range, Color fill, Color wire)
+        {
+            Vector3 dir = forward.sqrMagnitude > 1e-6f ? forward.normalized : Vector3.forward;
+            Vector3 center = origin + dir * (range * 0.5f);
+            float radius = range * 0.6f;
+            Gizmos.color = fill;
+            Gizmos.DrawSphere(center, radius);
+            Gizmos.color = wire;
+            Gizmos.DrawWireSphere(center, radius);
+            Gizmos.DrawLine(origin, origin + dir * range);
+        }
+
+        static void DrawWireCircle(Vector3 center, float radius, int segments = 32)
+        {
+            float step = Mathf.PI * 2f / segments;
+            Vector3 prev = center + new Vector3(radius, 0f, 0f);
+            for (int i = 1; i <= segments; i++)
+            {
+                float a = step * i;
+                Vector3 next = center + new Vector3(Mathf.Cos(a) * radius, 0f, Mathf.Sin(a) * radius);
+                Gizmos.DrawLine(prev, next);
+                prev = next;
             }
         }
     }
