@@ -728,6 +728,8 @@ GameObject:
   - component: {fileID: 3997172311845161343}
   - component: {fileID: 7066757817606746189}
   - component: {fileID: 1777438047080558175}
+  - component: {fileID: 5244179001981355485}
+  - component: {fileID: 1144273467004606577}
   m_Layer: 0
   m_Name: ZomBunny
   m_TagString: Untagged
@@ -743,7 +745,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 4313904411421434912}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: -0, z: -0, w: 1}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -801,6 +803,34 @@ MonoBehaviour:
   drawGizmos: 1
   gizmoColor: {r: 0.2, g: 0.8, b: 1, a: 0.8}
   selectedColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+--- !u!114 &5244179001981355485
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4313904411421434912}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6aa6a22256b5a1649987d38732817bc0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: GameAct::GameAct.Spatial.LogicCollider
+--- !u!114 &1144273467004606577
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4313904411421434912}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 72fed6dfc2caa004284f5675b26f03b7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: GameAct::GameAct.Skill.HitReceiver
+  MaxHp: 100
+  CurrentHp: 100
+  HitFlashColor: {r: 1, g: 0, b: 0, a: 1}
+  FlashDuration: 0.15
 --- !u!1 &5084298241896741744
 GameObject:
   m_ObjectHideFlags: 0
