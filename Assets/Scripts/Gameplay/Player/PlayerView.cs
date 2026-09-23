@@ -1,13 +1,13 @@
 using UnityEngine;
+using GameAct.Gameplay.Character;
+using GameAct.Spatial;
 
 namespace GameAct.Gameplay.Player
 {
     /// <summary>
     /// 纯表现层：跟 LES / 模拟位姿，不做物理。
-    /// 不挂 CharacterController（参考 LES ClientPlayerView：只跟实体 Position）。
-    /// 待机/走/跑由 Animator 1D BlendTree「Movement」驱动：
-    ///   0 = idle, 1 = walk, 2 = run（Shift 冲刺）。
-    /// 攻击由 Trigger「Attack」切换。
+    /// Prefab 标准：Root 挂本脚本 + LogicCollider* + HitReceiver，子节点 Model 挂 Animator。
+    /// 不再运行时 Load 模型。
     /// </summary>
     public class PlayerView : MonoBehaviour
     {
@@ -16,7 +16,6 @@ namespace GameAct.Gameplay.Player
 
         Animator _anim;
 
-        /// <summary>与 ActPlayer 对齐，用于把水平速度映射到 Movement 0 / 1 / 2。</summary>
         const float WalkSpeedRef = 5.5f;
         const float SprintSpeedRef = 8.5f;
         const float IdleCutoff = 0.15f;
@@ -26,6 +25,29 @@ namespace GameAct.Gameplay.Player
 
         /// <summary>兼容旧代码；始终为 null，禁止再绑 CC。</summary>
         public CharacterController CharacterController => null;
+
+        /// <summary>
+        /// 从标准 Prefab 实例化并 Setup。
+        /// </summary>
+        public static PlayerView Create(int entityId, bool isLocal, Vector3 position, Transform parent = null)
+        {
+            var go = CharacterPrefabLoader.InstantiatePlayer(position, Quaternion.identity, parent);
+            if (go == null)
+            {
+                // fallback：空 Root，避免空引用崩溃
+                go = new GameObject(isLocal ? "Player_Local" : $"Player_{entityId}");
+                if (parent != null)
+                    go.transform.SetParent(parent, false);
+                go.transform.position = position;
+            }
+
+            var view = go.GetComponent<PlayerView>();
+            if (view == null)
+                view = go.AddComponent<PlayerView>();
+
+            view.Setup(entityId, isLocal);
+            return view;
+        }
 
         public void Setup(int entityId, bool isLocal)
         {
@@ -38,24 +60,17 @@ namespace GameAct.Gameplay.Player
             if (existing != null)
                 Destroy(existing);
 
-            var model = LoadYBotModel();
-            if (model != null)
-            {
-                model.name = "Y_Bot";
-                model.transform.SetParent(transform, false);
-                model.transform.localPosition = Vector3.zero;
-                model.transform.localRotation = Quaternion.identity;
-                model.transform.localScale = Vector3.one;
-                _anim = model.GetComponentInChildren<Animator>();
-                if (_anim == null)
-                    Debug.LogWarning("[PlayerView] Y_Bot 上未找到 Animator");
-                else
-                    _anim.SetFloat(MovementHash, 0f);
-            }
+            // Prefab 已包含 Model 子节点 + Animator
+            _anim = GetComponentInChildren<Animator>();
+            if (_anim == null)
+                Debug.LogWarning($"[PlayerView] {name} 上未找到 Animator（检查 Prefab 子节点 Model）");
             else
-            {
-                Debug.LogError("[PlayerView] 未找到 Y_Bot.prefab");
-            }
+                _anim.SetFloat(MovementHash, 0f);
+
+            // 若有 Authoring，确保 Runtime LogicCollider 已初始化
+            var authoring = GetComponent<LogicColliderAuthoring>();
+            if (authoring != null)
+                authoring.BuildRuntimeCollider();
         }
 
         /// <summary>空实现：保留 API，避免旧调用编译失败。</summary>
@@ -73,11 +88,6 @@ namespace GameAct.Gameplay.Player
         {
             if (_anim == null) return;
 
-            // BlendTree thresholds: 0=idle, 1=walk, 2=run
-            // 速度映射：
-            //   [0, IdleCutoff)           → 0
-            //   [IdleCutoff, WalkSpeed]   → 0 → 1
-            //   (WalkSpeed, SprintSpeed]  → 1 → 2
             float movement;
             if (speedXZ < IdleCutoff)
             {
@@ -85,12 +95,12 @@ namespace GameAct.Gameplay.Player
             }
             else if (speedXZ <= WalkSpeedRef)
             {
-                movement = Mathf.Clamp01(speedXZ / WalkSpeedRef); // 0..1
+                movement = Mathf.Clamp01(speedXZ / WalkSpeedRef);
             }
             else
             {
                 float t = Mathf.Clamp01((speedXZ - WalkSpeedRef) / (SprintSpeedRef - WalkSpeedRef));
-                movement = 1f + t; // 1..2
+                movement = 1f + t;
             }
 
             _anim.SetFloat(MovementHash, movement, 0.1f, Time.deltaTime);
@@ -101,28 +111,6 @@ namespace GameAct.Gameplay.Player
         {
             if (_anim == null) return;
             _anim.SetTrigger(AttackHash);
-        }
-
-        static GameObject LoadYBotModel()
-        {
-            var res = Resources.Load<GameObject>("Character/Player/Y_Bot");
-            if (res != null) return Object.Instantiate(res);
-
-#if UNITY_EDITOR
-            var adType = System.Type.GetType("UnityEditor.AssetDatabase, UnityEditor");
-            if (adType != null)
-            {
-                var method = adType.GetMethod("LoadAssetAtPath", new[] { typeof(string), typeof(System.Type) });
-                if (method != null)
-                {
-                    var prefab = method.Invoke(null, new object[] {
-                        "Assets/Bundles/Character/Player/Y_Bot.prefab", typeof(GameObject)
-                    }) as GameObject;
-                    if (prefab != null) return Object.Instantiate(prefab);
-                }
-            }
-#endif
-            return null;
         }
     }
 }

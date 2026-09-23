@@ -10,6 +10,7 @@ namespace GameAct.Les
 {
     /// <summary>
     /// Solo 离线权威：ServerEntityManager + 本地 ActPlayer + 敌人，不绑端口。
+    /// Monster 从标准 Prefab 实例化。
     /// </summary>
     public sealed class LesAuthoritySession : IDisposable
     {
@@ -56,13 +57,14 @@ namespace GameAct.Les
 
                 var monster = _em.AddEntity<ActMonster>(e => e.Spawn(pos));
                 _em.AddAIController<MonsterBotController>(c => c.StartControl(monster));
+                // 标准 Prefab：Root=MonsterView+Logic+HitReceiver, Child=Model+Animator
                 var view = MonsterView.Create(monster.Id, pos, _viewRoot);
                 MoveToLevel(view.gameObject, levelSceneName);
                 _views.Add(view);
             }
 
             _started = true;
-            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={n}");
+            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={n} (prefab MonsterView)");
         }
 
         public void Tick()

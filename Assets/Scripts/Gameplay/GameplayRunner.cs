@@ -12,6 +12,7 @@ namespace GameAct.Gameplay
     /// <summary>
     /// LES 主路径：Input → ActPlayer 积分 → View 只跟位姿。
     /// 相机跟随「视线 Yaw」（鼠标），模型用身体 Yaw（朝移动方向）。
+    /// Player 从标准 Prefab 实例化（Root=View+Logic，Child=Model+Animator）。
     /// </summary>
     [DefaultExecutionOrder(0)]
     public class GameplayRunner : MonoBehaviour
@@ -65,7 +66,8 @@ namespace GameAct.Gameplay
                 throw new System.InvalidOperationException("无法启动 LES 会话: mode=" + mode);
             }
 
-            _localView = CreatePlayerView(0, isLocal: true);
+            int entityId = _lesLocalPlayer != null ? (int)_lesLocalPlayer.Id : 0;
+            _localView = PlayerView.Create(entityId, isLocal: true, spawnPos);
             MoveToLevelScene(_localView.gameObject, _levelSceneName);
             if (_lesLocalPlayer != null)
                 _localView.ApplyPose(_lesLocalPlayer.Position, _lesLocalPlayer.Yaw, 0f);
@@ -80,7 +82,7 @@ namespace GameAct.Gameplay
             }
 
             _started = true;
-            Debug.Log($"[Gameplay] LES session mode={mode} spawn={spawnPos} (body turns to move dir)");
+            Debug.Log($"[Gameplay] LES session mode={mode} spawn={spawnPos} (prefab PlayerView)");
         }
 
         public void StartSession(INetSession net, string levelSceneName = "Map1")
@@ -119,13 +121,11 @@ namespace GameAct.Gameplay
             if (_lesLocalPlayer != null && !_lesLocalPlayer.IsDestroyed && _localView != null)
             {
                 var pos = _lesLocalPlayer.InterpolatedPosition;
-                // 模型：身体朝向（会转向移动方向）
                 var bodyYaw = _lesLocalPlayer.InterpolatedYaw;
                 var v = _lesLocalPlayer.Velocity;
                 float speedXZ = new Vector2(v.x, v.z).magnitude;
                 _localView.ApplyPose(pos, bodyYaw, speedXZ);
 
-                // 相机：视线 Yaw（鼠标），按 A 转身时镜头不会硬甩
                 if (_camera != null)
                     _camera.SetTargetPose(pos, _lesLocalPlayer.LookYaw);
             }
@@ -179,14 +179,6 @@ namespace GameAct.Gameplay
             if (Physics.Raycast(origin, Vector3.down, out hit, 20f, ~0, QueryTriggerInteraction.Ignore))
                 return hit.point + Vector3.up * 0.05f;
             return new Vector3(pos.x, Mathf.Max(pos.y, 0.05f), pos.z);
-        }
-
-        static PlayerView CreatePlayerView(int entityId, bool isLocal)
-        {
-            var go = new GameObject("PlayerView_Local");
-            var view = go.AddComponent<PlayerView>();
-            view.Setup(entityId, isLocal);
-            return view;
         }
 
         void OnDestroy() => StopSession();
