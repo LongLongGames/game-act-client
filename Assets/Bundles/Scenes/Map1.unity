@@ -433,10 +433,9 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 852877959}
-  - component: {fileID: 852877958}
   - component: {fileID: 852877957}
   m_Layer: 0
-  m_Name: Test
+  m_Name: Spatial Debug Drawer
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -470,23 +469,6 @@ MonoBehaviour:
   gridColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.4}
   autoQueryEveryFrame: 1
   autoFindPlayer: 1
---- !u!114 &852877958
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 852877956}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f905c97d93dd6f54ab05dd1be1735691, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: GameAct::GameAct.Skill.SkillSystemExample
-  player: {fileID: 0}
-  debugDrawer: {fileID: 0}
-  DummyCount: 12
-  SpawnRadius: 18
-  DummyPrefab: {fileID: 5395370543460691581, guid: b545b089fb911df408079a6e9cacccd6, type: 3}
 --- !u!4 &852877959
 Transform:
   m_ObjectHideFlags: 0

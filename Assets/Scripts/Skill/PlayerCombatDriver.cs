@@ -1,5 +1,3 @@
-// Assets/Scripts/Skill/SkillSystemExample.cs
-// 技能输入 + CombatTargetRegistry；Gizmo：1 近战 / 2 射线 / 3 弹道 / 4 落雷区 / 5 持续圈
 using UnityEngine;
 using UnityEngine.InputSystem;
 using GameAct.Spatial;
@@ -7,21 +5,32 @@ using GameAct.Gameplay.Player;
 
 namespace GameAct.Skill
 {
-    public class SkillSystemExample : MonoBehaviour
+    /// <summary>
+    /// 正式战斗入口：本地玩家 SkillCaster + CombatTargetRegistry 命中。
+    /// 由 GameplayRunner 在会话启动后 Bind(PlayerView, entityId)。
+    /// Gizmo 也画在这里（Scene 视图打开 Gizmos；不依赖 SkillSystemExample）。
+    /// </summary>
+    public class PlayerCombatDriver : MonoBehaviour
     {
-        [Header("Refs（可空，运行时自动查找）")]
-        public Transform player;
-        public SpatialDebugDrawer debugDrawer;
+        public static PlayerCombatDriver Instance { get; private set; }
 
-        [Header("Gizmo")]
+        [Header("Optional debug")]
+        public SpatialDebugDrawer debugDrawer;
         public bool ShowAlwaysPreview = true;
         public float CastGizmoDuration = 0.7f;
 
         ISpatialIndex _spatial;
         IHitSystem _hitSystem;
         SkillCaster _caster;
-        bool _bound;
         PlayerView _playerView;
+        int _casterEntityId;
+        bool _ready;
+
+        SkillDefine _defMelee;
+        SkillDefine _defHitscan;
+        SkillDefine _defProjectile;
+        SkillDefine _defMeteor;
+        SkillDefine _defZone;
 
         int _lastSkillId;
         float _gizmoShowTime;
@@ -31,14 +40,33 @@ namespace GameAct.Skill
         float _gizmoRange;
         float _gizmoRadius;
 
-        SkillDefine _defMelee;
-        SkillDefine _defHitscan;
-        SkillDefine _defProjectile;
-        SkillDefine _defMeteor;
-        SkillDefine _defZone;
+        public SkillCaster Caster => _caster;
+        public IHitSystem HitSystem => _hitSystem;
+        public bool IsReady => _ready && _playerView != null;
 
-        void Start()
+        void Awake()
         {
+            if (Instance != null && Instance != this)
+            {
+                Debug.LogWarning("[PlayerCombatDriver] duplicate, destroying self");
+                Destroy(this);
+                return;
+            }
+            Instance = this;
+        }
+
+        void OnDestroy()
+        {
+            if (Instance == this)
+                Instance = null;
+        }
+
+        void Start() => EnsureSystems();
+
+        void EnsureSystems()
+        {
+            if (_caster != null) return;
+
             if (debugDrawer == null)
                 debugDrawer = FindObjectOfType<SpatialDebugDrawer>();
 
@@ -63,26 +91,45 @@ namespace GameAct.Skill
             if (debugDrawer != null)
                 debugDrawer.SetSpatialIndex(_spatial);
 
-            Debug.Log("[SkillSystemExample] Gizmo: 1 Melee / 2 Ray / 3 Projectile / 4 Area / 5 Zone");
+            Debug.Log("[PlayerCombatDriver] systems ready (1 Melee / 2 Rail / 3 Fireball / 4 Meteor / 5 Zone)");
+        }
+
+        public void Bind(PlayerView view, int casterEntityId)
+        {
+            EnsureSystems();
+            _playerView = view;
+            _casterEntityId = casterEntityId;
+            _ready = view != null;
+
+            if (debugDrawer != null && view != null)
+                debugDrawer.aoiCenter = view.transform;
+
+            Debug.Log(_ready
+                ? $"[PlayerCombatDriver] Bound view={view.name} entityId={casterEntityId}"
+                : "[PlayerCombatDriver] Bind failed: null PlayerView");
+        }
+
+        public void Unbind()
+        {
+            _playerView = null;
+            _casterEntityId = 0;
+            _ready = false;
         }
 
         void Update()
         {
-            if (!_bound)
-            {
-                TryBindPlayer();
-                if (!_bound) return;
-            }
+            if (!_ready || _playerView == null || _caster == null)
+                return;
 
             CombatTargetRegistry.SyncToSpatial(_spatial);
-
             float dt = Time.deltaTime;
             _caster.Tick(dt);
+            if (_gizmoShowTime > 0f)
+                _gizmoShowTime -= dt;
 
-            if (player == null) return;
-
-            Vector3 pos = player.position;
-            Vector3 fwd = player.forward;
+            var t = _playerView.transform;
+            Vector3 pos = t.position;
+            Vector3 fwd = t.forward;
             if (fwd.sqrMagnitude < 1e-6f)
                 fwd = Vector3.forward;
             else
@@ -90,7 +137,7 @@ namespace GameAct.Skill
 
             var ctx = new SkillCastContext
             {
-                CasterEntityId = 0,
+                CasterEntityId = _casterEntityId,
                 CasterPosition = pos,
                 CasterForward = fwd,
                 TargetPosition = pos + fwd * 10f,
@@ -103,27 +150,21 @@ namespace GameAct.Skill
 
             bool fireMelee = (kb != null && kb.digit1Key.wasPressedThisFrame)
                              || (mouse != null && mouse.leftButton.wasPressedThisFrame);
-            if (fireMelee)
+            if (fireMelee && _caster.TryCast(1, ctx))
             {
-                _playerView?.TriggerAttack();
-                if (_caster.TryCast(1, ctx))
-                    CaptureGizmo(1, pos, fwd, _defMelee);
+                _playerView.TriggerAttack();
+                CaptureGizmo(1, pos, fwd, _defMelee);
             }
 
-            if (kb != null)
-            {
-                if (kb.digit2Key.wasPressedThisFrame && _caster.TryCast(2, ctx))
-                    CaptureGizmo(2, pos, fwd, _defHitscan);
-                if (kb.digit3Key.wasPressedThisFrame && _caster.TryCast(3, ctx))
-                    CaptureGizmo(3, pos, fwd, _defProjectile);
-                if (kb.digit4Key.wasPressedThisFrame && _caster.TryCast(4, ctx))
-                    CaptureGizmo(4, pos, fwd, _defMeteor);
-                if (kb.digit5Key.wasPressedThisFrame && _caster.TryCast(5, ctx))
-                    CaptureGizmo(5, pos, fwd, _defZone);
-            }
-
-            if (_gizmoShowTime > 0f)
-                _gizmoShowTime -= dt;
+            if (kb == null) return;
+            if (kb.digit2Key.wasPressedThisFrame && _caster.TryCast(2, ctx))
+                CaptureGizmo(2, pos, fwd, _defHitscan);
+            if (kb.digit3Key.wasPressedThisFrame && _caster.TryCast(3, ctx))
+                CaptureGizmo(3, pos, fwd, _defProjectile);
+            if (kb.digit4Key.wasPressedThisFrame && _caster.TryCast(4, ctx))
+                CaptureGizmo(4, pos, fwd, _defMeteor);
+            if (kb.digit5Key.wasPressedThisFrame && _caster.TryCast(5, ctx))
+                CaptureGizmo(5, pos, fwd, _defZone);
         }
 
         void CaptureGizmo(int skillId, Vector3 origin, Vector3 forward, SkillDefine def)
@@ -132,9 +173,9 @@ namespace GameAct.Skill
             _gizmoShowTime = CastGizmoDuration;
             _gizmoOrigin = origin;
             _gizmoForward = forward.sqrMagnitude > 1e-6f ? forward.normalized : Vector3.forward;
-            _gizmoRange = def.Range;
-            _gizmoTarget = origin + _gizmoForward * 10f;
+            _gizmoRange = def != null ? def.Range : 3f;
 
+            if (def == null) return;
             switch (def.ExecType)
             {
                 case SkillExecType.Melee:
@@ -161,60 +202,25 @@ namespace GameAct.Skill
             }
         }
 
-        void TryBindPlayer()
+        static void OnSkillHit(int casterId, HitResult hit, SkillDefine def)
         {
-            if (player == null)
-            {
-                var views = FindObjectsOfType<PlayerView>();
-                foreach (var v in views)
-                {
-                    if (v != null && v.IsLocal)
-                    {
-                        player = v.transform;
-                        _playerView = v;
-                        break;
-                    }
-                }
-                if (player == null)
-                {
-                    var go = GameObject.Find("Player_Local");
-                    if (go != null)
-                    {
-                        player = go.transform;
-                        _playerView = go.GetComponent<PlayerView>();
-                    }
-                }
-            }
-            else if (_playerView == null)
-            {
-                _playerView = player.GetComponent<PlayerView>()
-                              ?? player.GetComponentInParent<PlayerView>();
-            }
-
-            if (player == null) return;
-            _bound = true;
-            if (debugDrawer != null)
-                debugDrawer.aoiCenter = player;
-        }
-
-        void OnSkillHit(int casterId, HitResult hit, SkillDefine def)
-        {
-            Debug.Log($"[Hit] Skill={def.Name} Target={hit.TargetEntityId} Dist={hit.Distance:F1} Dmg={def.BaseDamage}");
+            Debug.Log($"[PlayerCombat] Skill={def.Name} Target={hit.TargetEntityId} Dist={hit.Distance:F1} Dmg={def.BaseDamage}");
             if (CombatTargetRegistry.TryGetReceiver(hit.TargetEntityId, out var receiver) && receiver != null)
                 receiver.OnHit(hit, def);
         }
 
         void OnDrawGizmos()
         {
-            if (player == null) return;
+            if (!Application.isPlaying || _playerView == null)
+                return;
 
-            if (ShowAlwaysPreview && Application.isPlaying)
+            Vector3 origin = _playerView.transform.position;
+            Vector3 fwd = _playerView.transform.forward;
+            if (fwd.sqrMagnitude < 1e-6f) fwd = Vector3.forward;
+            else fwd.Normalize();
+
+            if (ShowAlwaysPreview)
             {
-                Vector3 origin = player.position;
-                Vector3 fwd = player.forward;
-                if (fwd.sqrMagnitude < 1e-6f) fwd = Vector3.forward;
-                else fwd.Normalize();
-
                 DrawMelee(origin, fwd, _defMelee != null ? _defMelee.Range : 2.8f,
                     new Color(1f, 0.55f, 0.1f, 0.12f), new Color(1f, 0.55f, 0.1f, 0.45f));
 

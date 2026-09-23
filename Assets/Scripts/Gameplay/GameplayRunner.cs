@@ -6,6 +6,7 @@ using GameAct.Gameplay.Camera;
 using GameAct.Net;
 using GameAct.Les;
 using GameAct.Les.Shared;
+using GameAct.Skill;
 
 namespace GameAct.Gameplay
 {
@@ -23,6 +24,7 @@ namespace GameAct.Gameplay
         string _levelSceneName = "Map1";
         LesAuthoritySession _lesSolo;
         ActPlayer _lesLocalPlayer;
+        PlayerCombatDriver _combatDriver;
 
         public SessionMode Mode => _mode;
         public bool IsStarted => _started;
@@ -79,8 +81,18 @@ namespace GameAct.Gameplay
                 _camera.SnapToTarget();
             }
 
+            EnsureCombatDriver(entityId);
+
             _started = true;
             Debug.Log($"[Gameplay] LES session mode={mode} spawn={spawnPos}");
+        }
+
+        void EnsureCombatDriver(int entityId)
+        {
+            if (_combatDriver == null)
+                _combatDriver = GetComponent<PlayerCombatDriver>()
+                                ?? gameObject.AddComponent<PlayerCombatDriver>();
+            _combatDriver.Bind(_localView, entityId);
         }
 
         public void StartSession(INetSession net, string levelSceneName = "Map1")
@@ -126,6 +138,8 @@ namespace GameAct.Gameplay
 
         public void StopSession()
         {
+            _combatDriver?.Unbind();
+            _combatDriver = null;
             _lesSolo?.Stop();
             _lesSolo = null;
             _lesLocalPlayer = null;
