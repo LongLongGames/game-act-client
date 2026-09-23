@@ -1,3 +1,7 @@
+/* MERGED → MonsterBotController. 本文件整文件废弃，可自行删除。
+   正式 AI：Assets/Scripts/LES/Shared/MonsterBotController.cs
+   注册：LesTypesMapFactory → GameEntities.MonsterBot → MonsterBotController
+
 using LiteEntitySystem;
 using UnityEngine;
 
@@ -37,3 +41,5 @@ namespace GameAct.Les.Shared
         }
     }
 }
+
+*/

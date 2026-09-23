@@ -1,3 +1,7 @@
+/* MERGED → ActMonster. 本文件整文件废弃，可自行删除。
+   正式敌方 Pawn：Assets/Scripts/LES/Shared/ActMonster.cs
+   注册：LesTypesMapFactory → GameEntities.Monster → ActMonster
+
 using LiteEntitySystem;
 using UnityEngine;
 
@@ -55,3 +59,5 @@ namespace GameAct.Les.Shared
         }
     }
 }
+
+*/

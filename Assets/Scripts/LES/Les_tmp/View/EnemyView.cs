@@ -1,3 +1,7 @@
+/* MERGED → MonsterView. 本文件整文件废弃，可自行删除。
+   正式表现：Assets/Scripts/LES/View/MonsterView.cs
+   Solo/Host/Client 刷怪与同步均走 MonsterView
+
 using UnityEngine;
 
 namespace GameAct.Les.View
@@ -44,3 +48,5 @@ namespace GameAct.Les.View
         }
     }
 }
+
+*/
