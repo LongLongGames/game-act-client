@@ -99,6 +99,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 4633594203929476134}
+  - component: {fileID: 6861654223245091538}
   - component: {fileID: -3649172082895033676}
   - component: {fileID: -6036663205626230170}
   - component: {fileID: 3330072602316403624}
@@ -125,6 +126,18 @@ Transform:
   - {fileID: 2397217854270115757}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &6861654223245091538
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8064076238631416754}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 84681bab337740d9859ea90ecb1a3b61, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: GameAct::GameAct.Les.View.MonsterView
 --- !u!114 &-3649172082895033676
 MonoBehaviour:
   m_ObjectHideFlags: 0
