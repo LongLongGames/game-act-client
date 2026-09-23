@@ -1520,6 +1520,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 84681bab337740d9859ea90ecb1a3b61, type: 3}
   m_Name: 
   m_EditorClassIdentifier: GameAct::GameAct.Les.View.MonsterView
+  DeathTriggerName: Dead
+  DeathDespawnDelay: 2.2
 --- !u!114 &575258864500878467
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1571,6 +1573,7 @@ MonoBehaviour:
   CurrentHp: 100
   HitFlashColor: {r: 1, g: 0, b: 0, a: 1}
   FlashDuration: 0.15
+  TargetRenderers: []
 --- !u!1 &8708588880576487152
 GameObject:
   m_ObjectHideFlags: 0

@@ -14,11 +14,12 @@ namespace GameAct.Les.Shared
         SyncVar<float> _yaw;
 
         Vector3 _moveDir;
+        bool _dead;
 
         public Vector3 Position => _position.Value;
         public float Yaw => _yaw.Value;
-        /// <summary>当前水平速度（用于 View Idle↔Move）。</summary>
-        public float SpeedXZ => _moveDir.magnitude * MoveSpeed;
+        public float SpeedXZ => _dead ? 0f : _moveDir.magnitude * MoveSpeed;
+        public bool IsDead => _dead;
 
         public ActMonster(EntityParams entityParams) : base(entityParams) { }
 
@@ -27,10 +28,22 @@ namespace GameAct.Les.Shared
             _position.Value = position;
             _yaw.Value = Random.Range(0f, 360f);
             _moveDir = Vector3.zero;
+            _dead = false;
+        }
+
+        public void MarkDead()
+        {
+            _dead = true;
+            _moveDir = Vector3.zero;
         }
 
         public void SetInput(Vector3 worldMoveDir, float yawDegrees)
         {
+            if (_dead)
+            {
+                _moveDir = Vector3.zero;
+                return;
+            }
             _moveDir = worldMoveDir;
             if (_moveDir.sqrMagnitude > 1f)
                 _moveDir.Normalize();
@@ -40,6 +53,7 @@ namespace GameAct.Les.Shared
         protected override void Update()
         {
             base.Update();
+            if (_dead) return;
             float dt = EntityManager.DeltaTimeF;
             if (_moveDir.sqrMagnitude <= 0.0001f) return;
             var delta = _moveDir * (MoveSpeed * dt);

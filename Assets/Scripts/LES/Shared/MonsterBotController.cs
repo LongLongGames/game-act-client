@@ -19,6 +19,12 @@ namespace GameAct.Les.Shared
             var pawn = ControlledEntity;
             if (pawn == null) return;
 
+            if (pawn.IsDead)
+            {
+                pawn.SetInput(Vector3.zero, pawn.Yaw);
+                return;
+            }
+
             _changeTimer -= EntityManager.DeltaTimeF;
             if (_changeTimer <= 0f)
             {
@@ -30,7 +36,6 @@ namespace GameAct.Les.Shared
             Vector3 dir = Vector3.zero;
             if (!idle)
             {
-                // Unity 约定：yaw=0 朝 +Z
                 float rad = _yaw * Mathf.Deg2Rad;
                 dir = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad));
             }

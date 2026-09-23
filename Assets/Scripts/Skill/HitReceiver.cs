@@ -21,6 +21,12 @@ namespace GameAct.Skill
         public float MaxHp = 100f;
         public float CurrentHp = 100f;
 
+        /// <summary>已死亡后忽略后续命中。</summary>
+        public bool IsDead { get; private set; }
+
+        /// <summary>HP 归零时触发一次（View 播死亡动画 / 请求销毁实体）。</summary>
+        public event System.Action<HitReceiver> Died;
+
         [Header("Hit Flash")]
         public Color HitFlashColor = new Color(1f, 0.2f, 0.12f, 1f);
         public float FlashDuration = 0.12f;
@@ -79,6 +85,8 @@ namespace GameAct.Skill
 
         public void OnHit(HitResult hit, SkillDefine skill)
         {
+            if (IsDead) return;
+
             CurrentHp -= skill.BaseDamage;
             Debug.Log($"[HitReceiver] Entity={EntityId} Name={gameObject.name} " +
                       $"Dmg={skill.BaseDamage} Hp={CurrentHp:F0}/{MaxHp} Skill={skill.Name}");
@@ -87,12 +95,18 @@ namespace GameAct.Skill
             ApplyFlash(1f);
 
             if (CurrentHp <= 0f)
-            {
-                Debug.Log($"[HitReceiver] Entity={EntityId} 死亡");
-                ClearFlash();
-                CombatTargetRegistry.Unregister(this);
-                gameObject.SetActive(false);
-            }
+                BeginDeath();
+        }
+
+        void BeginDeath()
+        {
+            if (IsDead) return;
+            IsDead = true;
+            CurrentHp = 0f;
+            ClearFlash();
+            CombatTargetRegistry.Unregister(this);
+            Debug.Log($"[HitReceiver] Entity={EntityId} 死亡 → Died 事件");
+            Died?.Invoke(this);
         }
 
         void ApplyFlash(float amount)

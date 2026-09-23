@@ -4,6 +4,7 @@ using LiteEntitySystem;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using GameAct.Les.Shared;
+using GameAct.Skill;
 using GameAct.Les.View;
 
 namespace GameAct.Les
@@ -48,7 +49,9 @@ namespace GameAct.Les
                 e.SetDriveLocally(true);
             });
 
-            SpawnMonstersInternal(center, monsterCount, baseRadius: 6f);
+                        SpawnMonstersInternal(center, monsterCount, baseRadius: 6f);
+
+            MonsterDeathService.AuthorityDestroyMonster = DestroyMonsterById;
             _started = true;
             Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={MonsterCount}");
         }
@@ -102,13 +105,17 @@ namespace GameAct.Les
         {
             if (!_started || _em == null) return;
             _em.Update();
-            for (int i = 0; i < _views.Count; i++)
+            for (int i = _views.Count - 1; i >= 0; i--)
             {
                 var view = _views[i];
-                if (view == null) continue;
+                if (view == null)
+                {
+                    _views.RemoveAt(i);
+                    continue;
+                }
                 foreach (var monster in _em.GetEntities<ActMonster>())
                 {
-                    if (monster != null && !monster.IsDestroyed && monster.Id == view.EntityId)
+                    if (monster != null && !monster.IsDestroyed && !monster.IsDead && monster.Id == view.EntityId)
                     {
                         view.Apply(monster.Position, monster.Yaw, monster.SpeedXZ);
                         break;
@@ -117,8 +124,23 @@ namespace GameAct.Les
             }
         }
 
+        void DestroyMonsterById(int entityId)
+        {
+            if (_em == null) return;
+            foreach (var monster in _em.GetEntities<ActMonster>())
+            {
+                if (monster == null || monster.IsDestroyed) continue;
+                if (monster.Id != entityId) continue;
+                monster.MarkDead();
+                monster.Destroy();
+                Debug.Log($"[LES] ActMonster destroyed id={entityId}");
+                break;
+            }
+        }
+
         public void Stop()
         {
+            MonsterDeathService.Clear();
             _localPlayer = null;
             for (int i = 0; i < _views.Count; i++)
                 if (_views[i] != null) UnityEngine.Object.Destroy(_views[i].gameObject);

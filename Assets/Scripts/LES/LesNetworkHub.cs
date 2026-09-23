@@ -10,6 +10,7 @@ using LiteNetLib.Utils;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using GameAct.Les.Shared;
+using GameAct.Skill;
 using GameAct.Les.Transport;
 using GameAct.Les.View;
 using GameAct.Net;
@@ -94,6 +95,7 @@ namespace GameAct.Les
                 (byte)LesTypesMapFactory.TickRate,
                 ServerSendRate.EqualToFPS);
             ClientEm = null;
+            MonsterDeathService.AuthorityDestroyMonster = DestroyMonsterById;
 
             if (transport == NetTransportKind.SteamP2P)
                 return await StartHostSteamAsync();
@@ -130,6 +132,8 @@ namespace GameAct.Les
 
         public void Disconnect()
         {
+            if (ServerEm != null)
+                MonsterDeathService.Clear();
             ClearViews();
 
             if (_steam != null)
@@ -609,7 +613,7 @@ namespace GameAct.Les
 
             foreach (var monster in em.GetEntities<ActMonster>())
             {
-                if (monster == null || monster.IsDestroyed) continue;
+                if (monster == null || monster.IsDestroyed || monster.IsDead) continue;
                 var view = FindView(monster.Id);
                 if (view == null)
                 {
@@ -620,6 +624,27 @@ namespace GameAct.Les
                     _views.Add(view);
                 }
                 view.Apply(monster.Position, monster.Yaw, monster.SpeedXZ);
+            }
+
+            // 清掉已销毁的 View 引用
+            for (int i = _views.Count - 1; i >= 0; i--)
+            {
+                if (_views[i] == null)
+                    _views.RemoveAt(i);
+            }
+        }
+
+        void DestroyMonsterById(int entityId)
+        {
+            if (ServerEm == null) return;
+            foreach (var monster in ServerEm.GetEntities<ActMonster>())
+            {
+                if (monster == null || monster.IsDestroyed) continue;
+                if (monster.Id != entityId) continue;
+                monster.MarkDead();
+                monster.Destroy();
+                Debug.Log($"[LES-Net] ActMonster destroyed id={entityId}");
+                break;
             }
         }
 
