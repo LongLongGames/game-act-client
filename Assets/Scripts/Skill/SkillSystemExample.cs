@@ -1,5 +1,6 @@
 // Assets/Scripts/Skill/SkillSystemExample.cs
-using System.Collections.Generic;
+// 仅负责：玩家技能输入 + 命中 CombatTargetRegistry（LES 怪 / Debug 刷怪）。
+// 已删除：自动刷 Dummy（请用 F12 → Combat/spawn_monster）。
 using UnityEngine;
 using UnityEngine.InputSystem;
 using GameAct.Spatial;
@@ -13,40 +14,27 @@ namespace GameAct.Skill
         public Transform player;
         public SpatialDebugDrawer debugDrawer;
 
-        [Header("Dummy 生成")]
-        public int DummyCount = 12;
-        public float SpawnRadius = 18f;
-        public GameObject DummyPrefab;          // 可拖 Dummy.prefab，空则运行时创建
+        ISpatialIndex _spatial;
+        IHitSystem _hitSystem;
+        SkillCaster _caster;
+        bool _bound;
+        PlayerView _playerView;
 
-        private ISpatialIndex _spatial;
-        private IHitSystem _hitSystem;
-        private SkillCaster _caster;
-        private readonly Dictionary<int, AABB> _entityBounds = new Dictionary<int, AABB>();
-        private readonly Dictionary<int, HitReceiver> _hitReceivers = new Dictionary<int, HitReceiver>();
-        private readonly List<GameObject> _spawnedDummies = new List<GameObject>();
-        private bool _bound;
-        private PlayerView _playerView;
+        float _lastMeleeRange;
+        Vector3 _lastMeleeCenter;
+        Vector3 _lastMeleeForward;
+        float _lastMeleeRadius;
+        float _gizmoShowTime;
 
-        // 攻击范围可视化缓存
-        private float _lastMeleeRange;
-        private Vector3 _lastMeleeCenter;
-        private Vector3 _lastMeleeForward;
-        private float _lastMeleeRadius;
-        private float _gizmoShowTime;
-
-        private void Start()
+        void Start()
         {
             if (debugDrawer == null)
                 debugDrawer = FindObjectOfType<SpatialDebugDrawer>();
 
             _spatial = new SpatialHash(10f);
-
             var hit = new HitSystem(_spatial);
-            hit.GetEntityBounds = id => _entityBounds.TryGetValue(id, out var b) ? b : (AABB?)null;
+            hit.GetEntityBounds = id => CombatTargetRegistry.GetBounds(id);
             _hitSystem = hit;
-
-            // ========== ② 去掉纯静态 Gizmos，改成可见 Dummy ==========
-            SpawnDummies();
 
             _caster = new SkillCaster();
             _caster.AddSkill(SkillDefine.CreateMelee("Slash", 2.8f, 15f));
@@ -58,58 +46,10 @@ namespace GameAct.Skill
             if (debugDrawer != null)
                 debugDrawer.SetSpatialIndex(_spatial);
 
-            Debug.Log("[SkillSystemExample] Ready. Waiting for Player_Local...");
+            Debug.Log("[SkillSystemExample] Ready. Targets=CombatTargetRegistry. Spawn via F12 spawn_monster.");
         }
 
-        private void SpawnDummies()
-        {
-            if (DummyPrefab == null)
-            {
-                Debug.LogError("[SkillSystemExample] DummyPrefab 未赋值！请把 Assets/Bundles/Character/Monster/Dummy.prefab 拖进来");
-                return;
-            }
-
-            for (int i = 1; i <= DummyCount; i++)
-            {
-                Vector3 pos = new Vector3(
-                    Random.Range(-SpawnRadius, SpawnRadius),
-                    0f,
-                    Random.Range(5f, SpawnRadius + 8f)
-                );
-
-                GameObject go = Instantiate(DummyPrefab, pos, Quaternion.identity);
-                go.name = $"Dummy_{i}";
-
-                // 确保 LogicCollider
-                var authoring = go.GetComponent<LogicColliderAuthoring>();
-                if (authoring == null)
-                {
-                    authoring = go.AddComponent<LogicColliderAuthoring>();
-                    authoring.Colliders = new[] { LogicColliderData.DefaultBody() };
-                }
-                var logicCol = authoring.BuildRuntimeCollider();
-
-                // HitReceiver
-                var receiver = go.GetComponent<HitReceiver>();
-                if (receiver == null)
-                    receiver = go.AddComponent<HitReceiver>();
-                receiver.EntityId = i;
-                receiver.MaxHp = 80f + Random.Range(0, 40);
-                receiver.CurrentHp = receiver.MaxHp;
-
-                AABB bounds = logicCol.GetWorldBounds();
-                _spatial.Insert(i, bounds, SpatialLayer.Ground);
-                _entityBounds[i] = bounds;
-                _hitReceivers[i] = receiver;
-
-                if (debugDrawer != null)
-                    debugDrawer.SetEntityBounds(i, bounds);
-
-                _spawnedDummies.Add(go);
-            }
-        }
-
-        private void Update()
+        void Update()
         {
             if (!_bound)
             {
@@ -117,11 +57,11 @@ namespace GameAct.Skill
                 if (!_bound) return;
             }
 
+            // 施法前把 Registry 同步进 Spatial（含 LES 怪位移） Debug 刷的怪）
+            CombatTargetRegistry.SyncToSpatial(_spatial);
+
             float dt = Time.deltaTime;
             _caster.Tick(dt);
-
-            // 同步 Dummy 位置到 Spatial（如果以后会移动）
-            // 这里 Dummy 静止，可省略
 
             if (player == null) return;
 
@@ -145,7 +85,6 @@ namespace GameAct.Skill
                 _playerView?.TriggerAttack();
                 if (_caster.TryCast(1, ctx))
                 {
-                    // 记录攻击范围用于 Gizmos
                     var def = SkillDefine.CreateMelee("Slash", 2.8f, 15f);
                     _lastMeleeRange = def.Range;
                     _lastMeleeCenter = player.position + player.forward.normalized * (def.Range * 0.5f);
@@ -166,7 +105,7 @@ namespace GameAct.Skill
                 _gizmoShowTime -= dt;
         }
 
-        private void TryBindPlayer()
+        void TryBindPlayer()
         {
             if (player == null)
             {
@@ -200,43 +139,33 @@ namespace GameAct.Skill
             if (player == null) return;
 
             _bound = true;
-
             if (debugDrawer != null)
                 debugDrawer.aoiCenter = player;
 
             Debug.Log($"[SkillSystemExample] Bound to {player.name}");
         }
 
-        private void OnSkillHit(int casterId, HitResult hit, SkillDefine def)
+        void OnSkillHit(int casterId, HitResult hit, SkillDefine def)
         {
             Debug.Log($"[Hit] Skill={def.Name} Target={hit.TargetEntityId} Dist={hit.Distance:F1} Dmg={def.BaseDamage}");
 
-            // 真正把伤害打到 HitReceiver 上
-            if (_hitReceivers.TryGetValue(hit.TargetEntityId, out var receiver) && receiver != null)
-            {
+            if (CombatTargetRegistry.TryGetReceiver(hit.TargetEntityId, out var receiver) && receiver != null)
                 receiver.OnHit(hit, def);
-            }
         }
 
-        // ========== ① 绘制攻击范围 Gizmos ==========
-        private void OnDrawGizmos()
+        void OnDrawGizmos()
         {
             if (player == null) return;
 
-            // 近战攻击范围（临时显示）
             if (_gizmoShowTime > 0f)
             {
                 Gizmos.color = new Color(1f, 0.2f, 0.1f, 0.35f);
                 Gizmos.DrawSphere(_lastMeleeCenter, _lastMeleeRadius);
-
                 Gizmos.color = new Color(1f, 0.3f, 0.1f, 0.9f);
                 Gizmos.DrawWireSphere(_lastMeleeCenter, _lastMeleeRadius);
-
-                // 方向指示
                 Gizmos.DrawLine(player.position, player.position + _lastMeleeForward * _lastMeleeRange);
             }
 
-            // 常驻：当前玩家面前的近战预览范围（半透明）
             if (Application.isPlaying)
             {
                 float range = 2.8f;
@@ -246,15 +175,6 @@ namespace GameAct.Skill
                 Gizmos.color = new Color(1f, 0.6f, 0.1f, 0.6f);
                 Gizmos.DrawWireSphere(center, range * 0.6f);
             }
-        }
-
-        private void OnDestroy()
-        {
-            foreach (var go in _spawnedDummies)
-            {
-                if (go != null) Destroy(go);
-            }
-            _spawnedDummies.Clear();
         }
     }
 }

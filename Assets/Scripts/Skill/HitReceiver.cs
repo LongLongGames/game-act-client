@@ -5,8 +5,7 @@ using GameAct.Spatial;
 namespace GameAct.Skill
 {
     /// <summary>
-    /// 挂在 Dummy / 怪物上，接收技能命中。
-    /// 可扩展血量、受击反馈、死亡等。
+    /// 挂在怪物 Prefab Root 上，接收技能命中。
     /// </summary>
     [RequireComponent(typeof(LogicCollider))]
     public class HitReceiver : MonoBehaviour
@@ -21,18 +20,18 @@ namespace GameAct.Skill
         public Color HitFlashColor = Color.red;
         public float FlashDuration = 0.15f;
 
-        private Renderer _renderer;
-        private Color _originalColor;
-        private float _flashTimer;
+        Renderer _renderer;
+        Color _originalColor;
+        float _flashTimer;
 
-        private void Awake()
+        void Awake()
         {
             _renderer = GetComponentInChildren<Renderer>();
             if (_renderer != null)
                 _originalColor = _renderer.material.color;
         }
 
-        private void Update()
+        void Update()
         {
             if (_flashTimer > 0f)
             {
@@ -42,16 +41,12 @@ namespace GameAct.Skill
             }
         }
 
-        /// <summary>
-        /// 被技能命中时调用
-        /// </summary>
         public void OnHit(HitResult hit, SkillDefine skill)
         {
             CurrentHp -= skill.BaseDamage;
             Debug.Log($"[HitReceiver] Entity={EntityId} Name={gameObject.name} " +
                       $"Dmg={skill.BaseDamage} Hp={CurrentHp:F0}/{MaxHp} Skill={skill.Name}");
 
-            // 闪红反馈
             if (_renderer != null)
             {
                 _renderer.material.color = HitFlashColor;
@@ -61,9 +56,14 @@ namespace GameAct.Skill
             if (CurrentHp <= 0f)
             {
                 Debug.Log($"[HitReceiver] Entity={EntityId} 死亡");
-                // 这里可以播死亡动画 / 回收对象池
+                CombatTargetRegistry.Unregister(this);
                 gameObject.SetActive(false);
             }
+        }
+
+        void OnDisable()
+        {
+            CombatTargetRegistry.Unregister(this);
         }
     }
 }

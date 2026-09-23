@@ -1,12 +1,13 @@
 using UnityEngine;
 using GameAct.Gameplay.Character;
 using GameAct.Spatial;
+using GameAct.Skill;
 
 namespace GameAct.Les.View
 {
     /// <summary>
     /// Monster 表现层。Prefab 标准：Root 挂本脚本 + LogicCollider* + HitReceiver，子节点 Model 挂 Animator。
-    /// 不再运行时拼模型。
+    /// Setup 时注册到 CombatTargetRegistry，供技能统一命中。
     /// </summary>
     public class MonsterView : MonoBehaviour
     {
@@ -14,6 +15,7 @@ namespace GameAct.Les.View
 
         Animator _anim;
         float _walkThreshold = 0.15f;
+        HitReceiver _hitReceiver;
 
         static readonly int SpeedHash = Animator.StringToHash("Speed");
         static readonly int MovementHash = Animator.StringToHash("Movement");
@@ -23,7 +25,6 @@ namespace GameAct.Les.View
             var go = CharacterPrefabLoader.InstantiateMonster(position, Quaternion.identity, parent);
             if (go == null)
             {
-                // fallback：空节点 + 胶囊，避免整批刷怪失败
                 go = new GameObject($"MonsterView_{entityId}");
                 if (parent != null)
                     go.transform.SetParent(parent, false);
@@ -49,7 +50,6 @@ namespace GameAct.Les.View
                 Debug.LogWarning($"[MonsterView] {name} 上未找到 Animator");
             else
             {
-                // 兼容 Speed 或 Movement 参数
                 if (HasParam(_anim, SpeedHash))
                     _anim.SetFloat(SpeedHash, 0f);
                 if (HasParam(_anim, MovementHash))
@@ -57,8 +57,29 @@ namespace GameAct.Les.View
             }
 
             var authoring = GetComponent<LogicColliderAuthoring>();
+            LogicCollider logic = null;
             if (authoring != null)
-                authoring.BuildRuntimeCollider();
+                logic = authoring.BuildRuntimeCollider();
+            else
+                logic = GetComponent<LogicCollider>();
+
+            _hitReceiver = GetComponent<HitReceiver>();
+            if (_hitReceiver == null)
+                _hitReceiver = gameObject.AddComponent<HitReceiver>();
+
+            CombatTargetRegistry.Register(entityId, _hitReceiver, logic);
+        }
+
+        void OnDisable()
+        {
+            if (_hitReceiver != null)
+                CombatTargetRegistry.Unregister(_hitReceiver);
+        }
+
+        void OnDestroy()
+        {
+            if (_hitReceiver != null)
+                CombatTargetRegistry.Unregister(_hitReceiver);
         }
 
         public void Apply(Vector3 position, float yawDegrees, float speedXZ = 0f)

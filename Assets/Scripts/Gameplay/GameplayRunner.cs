@@ -11,8 +11,6 @@ namespace GameAct.Gameplay
 {
     /// <summary>
     /// LES 主路径：Input → ActPlayer 积分 → View 只跟位姿。
-    /// 相机跟随「视线 Yaw」（鼠标），模型用身体 Yaw（朝移动方向）。
-    /// Player 从标准 Prefab 实例化（Root=View+Logic，Child=Model+Animator）。
     /// </summary>
     [DefaultExecutionOrder(0)]
     public class GameplayRunner : MonoBehaviour
@@ -82,7 +80,7 @@ namespace GameAct.Gameplay
             }
 
             _started = true;
-            Debug.Log($"[Gameplay] LES session mode={mode} spawn={spawnPos} (prefab PlayerView)");
+            Debug.Log($"[Gameplay] LES session mode={mode} spawn={spawnPos}");
         }
 
         public void StartSession(INetSession net, string levelSceneName = "Map1")
@@ -91,6 +89,39 @@ namespace GameAct.Gameplay
             if (net != null && net.IsConnected)
                 mode = net.Role == NetRole.Client ? SessionMode.Client : SessionMode.Host;
             StartSession(net, levelSceneName, mode);
+        }
+
+        /// <summary>
+        /// Debug 刷怪：只走 LES（ActMonster + AI + View）。Solo 可用；Host 若 Hub 有同等 API 可再扩展。
+        /// </summary>
+        public bool TrySpawnDebugMonsters(int count, float radius = 12f)
+        {
+            if (!_started)
+            {
+                Debug.LogWarning("[Gameplay] session not started");
+                return false;
+            }
+
+            var center = _lesLocalPlayer != null && !_lesLocalPlayer.IsDestroyed
+                ? _lesLocalPlayer.Position
+                : SnapToGround(FindSpawnPosition());
+
+            if (_lesSolo != null && _lesSolo.IsStarted)
+            {
+                _lesSolo.SpawnExtraMonsters(center, count, radius, _levelSceneName);
+                return true;
+            }
+
+            if (_mode == SessionMode.Host && _net is LesNetworkHub hub)
+            {
+                // Hub 若实现了 SpawnExtraMonsters 则用；否则至少刷一圈开局怪接口
+                hub.SpawnMonstersAround(center, _levelSceneName);
+                Debug.LogWarning("[Gameplay] Host 使用 SpawnMonstersAround（若已刷过可能无效，请在 Hub 加 SpawnExtraMonsters）");
+                return true;
+            }
+
+            Debug.LogWarning("[Gameplay] 当前模式无法权威刷怪（Client 不行，需 Solo/Host）");
+            return false;
         }
 
         public void StopSession()

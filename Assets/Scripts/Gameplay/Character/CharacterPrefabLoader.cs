@@ -3,8 +3,8 @@ using UnityEngine;
 namespace GameAct.Gameplay.Character
 {
     /// <summary>
-    /// 统一从 Resources / Editor AssetDatabase 加载 Character Prefab。
-    /// Prefab 标准结构：Root(View + LogicColliderAuthoring + LogicCollider + HitReceiver) → Model(Animator)。
+    /// 统一加载 Character Prefab。
+    /// Monster 只用标准 Dummy（整理后的 prefab），禁止再 fallback ZomBunny。
     /// </summary>
     public static class CharacterPrefabLoader
     {
@@ -14,10 +14,6 @@ namespace GameAct.Gameplay.Character
         public const string MonsterResourcePath = "Character/Monster/Dummy";
         public const string MonsterEditorPath = "Assets/Bundles/Character/Monster/Dummy.prefab";
 
-        /// <summary>备用：旧 ZomBunny 路径。</summary>
-        public const string MonsterFallbackResourcePath = "Character/Monster/ZomBunny";
-        public const string MonsterFallbackEditorPath = "Assets/Bundles/Character/Monster/ZomBunny.prefab";
-
         public static GameObject LoadPlayerPrefab()
         {
             return Load(PlayerResourcePath, PlayerEditorPath);
@@ -25,9 +21,7 @@ namespace GameAct.Gameplay.Character
 
         public static GameObject LoadMonsterPrefab()
         {
-            var go = Load(MonsterResourcePath, MonsterEditorPath);
-            if (go != null) return go;
-            return Load(MonsterFallbackResourcePath, MonsterFallbackEditorPath);
+            return Load(MonsterResourcePath, MonsterEditorPath);
         }
 
         public static GameObject InstantiatePlayer(Vector3 position, Quaternion rotation, Transform parent = null)
@@ -35,7 +29,7 @@ namespace GameAct.Gameplay.Character
             var prefab = LoadPlayerPrefab();
             if (prefab == null)
             {
-                Debug.LogError($"[CharacterPrefabLoader] 未找到 Player Prefab: {PlayerResourcePath} / {PlayerEditorPath}");
+                Debug.LogError($"[CharacterPrefabLoader] 未找到 Player Prefab: {PlayerResourcePath}");
                 return null;
             }
             return Object.Instantiate(prefab, position, rotation, parent);
@@ -46,7 +40,7 @@ namespace GameAct.Gameplay.Character
             var prefab = LoadMonsterPrefab();
             if (prefab == null)
             {
-                Debug.LogError($"[CharacterPrefabLoader] 未找到 Monster Prefab: {MonsterResourcePath} 或 fallback ZomBunny");
+                Debug.LogError($"[CharacterPrefabLoader] 未找到 Monster Prefab: {MonsterResourcePath}（请确认 Dummy.prefab 已按标准整理）");
                 return null;
             }
             return Object.Instantiate(prefab, position, rotation, parent);

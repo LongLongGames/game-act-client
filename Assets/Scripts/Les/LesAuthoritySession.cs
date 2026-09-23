@@ -9,8 +9,8 @@ using GameAct.Les.View;
 namespace GameAct.Les
 {
     /// <summary>
-    /// Solo 离线权威：ServerEntityManager + 本地 ActPlayer + 敌人，不绑端口。
-    /// Monster 从标准 Prefab 实例化。
+    /// Solo 离线权威：ServerEntityManager + 本地 ActPlayer + 敌人。
+    /// 刷怪统一：AddEntity&lt;ActMonster&gt; + MonsterBotController + MonsterView（Dummy prefab）。
     /// </summary>
     public sealed class LesAuthoritySession : IDisposable
     {
@@ -48,23 +48,54 @@ namespace GameAct.Les
                 e.SetDriveLocally(true);
             });
 
-            int n = Mathf.Clamp(monsterCount, 0, 64);
+            SpawnMonstersInternal(center, monsterCount, baseRadius: 6f);
+            _started = true;
+            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={MonsterCount}");
+        }
+
+        /// <summary>
+        /// Debug / 运行时追加怪：同一套 LES 链路（会走、有 AI），不是站桩 View。
+        /// </summary>
+        public void SpawnExtraMonsters(Vector3 center, int count, float radius, string levelSceneName = null)
+        {
+            if (!_started || _em == null)
+            {
+                Debug.LogWarning("[LES] SpawnExtraMonsters: session not started");
+                return;
+            }
+            if (!string.IsNullOrEmpty(levelSceneName))
+                _levelSceneName = levelSceneName;
+
+            int n = Mathf.Clamp(count, 1, 64);
             for (int i = 0; i < n; i++)
             {
                 float ang = (i / (float)Mathf.Max(1, n)) * Mathf.PI * 2f;
-                float radius = 6f + (i % 3) * 2.5f;
-                var pos = Snap(center + new Vector3(Mathf.Cos(ang) * radius, 0f, Mathf.Sin(ang) * radius));
-
-                var monster = _em.AddEntity<ActMonster>(e => e.Spawn(pos));
-                _em.AddAIController<MonsterBotController>(c => c.StartControl(monster));
-                // 标准 Prefab：Root=MonsterView+Logic+HitReceiver, Child=Model+Animator
-                var view = MonsterView.Create(monster.Id, pos, _viewRoot);
-                MoveToLevel(view.gameObject, levelSceneName);
-                _views.Add(view);
+                float r = radius * (0.35f + 0.65f * ((i % 3) / 2f));
+                var pos = Snap(center + new Vector3(Mathf.Cos(ang) * r, 0f, Mathf.Sin(ang) * r));
+                SpawnOne(pos);
             }
+            Debug.Log($"[LES] SpawnExtraMonsters +{n} totalViews={_views.Count}");
+        }
 
-            _started = true;
-            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={n} (prefab MonsterView)");
+        void SpawnMonstersInternal(Vector3 center, int count, float baseRadius)
+        {
+            int n = Mathf.Clamp(count, 0, 64);
+            for (int i = 0; i < n; i++)
+            {
+                float ang = (i / (float)Mathf.Max(1, n)) * Mathf.PI * 2f;
+                float radius = baseRadius + (i % 3) * 2.5f;
+                var pos = Snap(center + new Vector3(Mathf.Cos(ang) * radius, 0f, Mathf.Sin(ang) * radius));
+                SpawnOne(pos);
+            }
+        }
+
+        void SpawnOne(Vector3 pos)
+        {
+            var monster = _em.AddEntity<ActMonster>(e => e.Spawn(pos));
+            _em.AddAIController<MonsterBotController>(c => c.StartControl(monster));
+            var view = MonsterView.Create(monster.Id, pos, _viewRoot);
+            MoveToLevel(view.gameObject, _levelSceneName);
+            _views.Add(view);
         }
 
         public void Tick()
