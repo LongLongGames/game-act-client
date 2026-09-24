@@ -3,30 +3,35 @@ using UnityEngine;
 namespace GameAct.Skill
 {
     /// <summary>
-    /// Flying projectile. Kinematic movement + sphere overlap each tick.
-    /// Visual: loads prefab from Bundles/VFX (Fireball / generic Projectile) and follows position.
-    /// For full LES integration later: spawn as PredictedEntity.
+    /// Flying projectile. Kinematic + sphere overlap.
+    /// VFX：只从 Assets/Bundles/VFX/FireBall 加载，不运行时 CreatePrimitive。
     /// </summary>
     public class ProjectileSkill : SkillBase
     {
+        // 与 CharacterPrefabLoader 同一约定
+        public const string VfxResourcePath = "VFX/FireBall";
+        public const string VfxEditorPath = "Assets/Bundles/VFX/FireBall.prefab";
+
         private Vector3 _position;
         private Vector3 _velocity;
         private float _aliveTime;
 
-        // Visual instance (from Bundles/VFX)
         private GameObject _vfxInstance;
         private Transform _vfxTransform;
         private ParticleSystem[] _particleSystems;
 
-        // Fallback when no prefab found
-        private static GameObject _fallbackSpherePrefab;
+        private static GameObject _cachedPrefab;
 
         public ProjectileSkill(SkillDefine define) : base(define) { }
 
         protected override void OnCastStart()
         {
             _position = _ctx.CasterPosition + Vector3.up * 1.2f + _ctx.CasterForward * 0.8f;
-            Vector3 dir = _ctx.CasterForward;
+
+            Vector3 dir = _ctx.CasterForward.sqrMagnitude > 1e-6f
+                ? _ctx.CasterForward.normalized
+                : Vector3.forward;
+
             if (_ctx.TargetPosition.HasValue)
             {
                 Vector3 toTarget = _ctx.TargetPosition.Value - _position;
@@ -34,7 +39,7 @@ namespace GameAct.Skill
                     dir = toTarget.normalized;
             }
 
-            _velocity = dir.normalized * Define.ProjectileSpeed;
+            _velocity = dir * Define.ProjectileSpeed;
             _aliveTime = 0f;
 
             SpawnVfx();
@@ -50,13 +55,9 @@ namespace GameAct.Skill
                 return;
             }
 
-            // Position update (kinematic)
             _position += _velocity * dt;
-
-            // Keep visual in sync every frame
             SyncVfxPosition();
 
-            // Simple collision check
             _hitBuffer.Clear();
             _ctx.HitSystem.OverlapSphere(_position, Define.ProjectileRadius, Define.TargetLayers, _hitBuffer, Define.MaxTargets);
 
@@ -64,7 +65,7 @@ namespace GameAct.Skill
             {
                 ApplyHits();
                 PlayImpactVfx();
-                Stop(); // destroy on first hit (can change to pierce later)
+                Stop();
             }
         }
 
@@ -73,33 +74,32 @@ namespace GameAct.Skill
             DestroyVfx();
         }
 
-        // -------------------------------------------------------------------------
-        // VFX helpers – prefer Bundles/VFX resources
-        // -------------------------------------------------------------------------
-
         private void SpawnVfx()
         {
             DestroyVfx();
 
-            GameObject prefab = TryLoadVfxPrefab();
-            if (prefab != null)
+            var prefab = LoadFireBallPrefab();
+            if (prefab == null)
             {
-                _vfxInstance = Object.Instantiate(prefab, _position, Quaternion.LookRotation(_velocity.normalized));
-            }
-            else
-            {
-                // Runtime fallback so fireball is still visible without art
-                _vfxInstance = CreateFallbackSphere();
-                _vfxInstance.transform.position = _position;
-                _vfxInstance.transform.rotation = Quaternion.LookRotation(_velocity.normalized);
+                Debug.LogError($"[ProjectileSkill] 未找到 VFX：{VfxEditorPath}（或 Resources/{VfxResourcePath}）。禁止运行时 Create。");
+                return;
             }
 
+            Quaternion rot = _velocity.sqrMagnitude > 1e-4f
+                ? Quaternion.LookRotation(_velocity.normalized)
+                : Quaternion.identity;
+
+            _vfxInstance = Object.Instantiate(prefab, _position, rot);
+            _vfxInstance.name = "FireBall_Runtime";
             _vfxTransform = _vfxInstance.transform;
             _particleSystems = _vfxInstance.GetComponentsInChildren<ParticleSystem>(true);
 
-            // Scale roughly to projectile radius
-            float s = Mathf.Max(0.4f, Define.ProjectileRadius * 2.2f);
-            _vfxTransform.localScale = Vector3.one * s;
+            // 不强制改 scale，保留 prefab 原尺寸；仅当半径异常大时略放大
+            if (Define.ProjectileRadius > 0.5f)
+            {
+                float s = Define.ProjectileRadius * 2f;
+                _vfxTransform.localScale = Vector3.one * s;
+            }
         }
 
         private void SyncVfxPosition()
@@ -112,8 +112,6 @@ namespace GameAct.Skill
 
         private void PlayImpactVfx()
         {
-            // Optional: if the prefab has a child named "Impact", enable it briefly.
-            // For now just stop emission so the trail dies cleanly.
             if (_particleSystems == null) return;
             foreach (var ps in _particleSystems)
             {
@@ -135,104 +133,62 @@ namespace GameAct.Skill
         }
 
         /// <summary>
-        /// Load order:
-        /// 1. Resources path "VFX/Fireball" or "VFX/Projectile" (if you put assets under Resources)
-        /// 2. Common AssetBundle path convention: Bundles/VFX/... (via AssetBundleFramework if present)
-        /// 3. null → fallback sphere
+        /// 与 CharacterPrefabLoader.Load 相同：先 Resources，Editor 再 AssetDatabase 直读 Bundles。
         /// </summary>
-        private GameObject TryLoadVfxPrefab()
+        private static GameObject LoadFireBallPrefab()
         {
-            // Prefer named fireball when skill name contains fire/ball
-            string[] candidates =
-            {
-                "VFX/Fireball",
-                "VFX/Projectile_Fireball",
-                "VFX/Projectile",
-                "Bundles/VFX/Fireball",
-                "Bundles/VFX/Projectile"
-            };
+            if (_cachedPrefab != null)
+                return _cachedPrefab;
 
-            foreach (var path in candidates)
+            var res = Resources.Load<GameObject>(VfxResourcePath);
+            if (res != null)
             {
-                var go = Resources.Load<GameObject>(path);
-                if (go != null)
-                    return go;
+                _cachedPrefab = res;
+                return _cachedPrefab;
             }
 
-            // If project uses AssetBundleFramework, try a soft reflection load
-            // (avoids hard dependency when framework is not yet linked)
-            try
+#if UNITY_EDITOR
+            var adType = System.Type.GetType("UnityEditor.AssetDatabase, UnityEditor");
+            if (adType != null)
             {
-                var type = System.Type.GetType("AssetBundleFramework.AssetManager, Assembly-CSharp")
-                           ?? System.Type.GetType("AssetBundleFramework.AssetManager");
-                if (type != null)
+                var method = adType.GetMethod("LoadAssetAtPath", new[] { typeof(string), typeof(System.Type) });
+                if (method != null)
                 {
-                    var method = type.GetMethod("LoadAsset", new[] { typeof(string), typeof(System.Type) })
-                                 ?? type.GetMethod("Load", new[] { typeof(string) });
-                    if (method != null)
+                    var prefab = method.Invoke(null, new object[] { VfxEditorPath, typeof(GameObject) }) as GameObject;
+                    if (prefab != null)
                     {
-                        object instance = null;
-                        var prop = type.GetProperty("Instance") ?? type.GetProperty("Current");
-                        if (prop != null)
-                            instance = prop.GetValue(null);
+                        _cachedPrefab = prefab;
+                        return _cachedPrefab;
+                    }
+                }
+            }
+#endif
 
-                        foreach (var path in new[] { "VFX/Fireball", "VFX/Projectile", "Bundles/VFX/Fireball" })
+            // 兼容小写 fireball 文件名
+#if UNITY_EDITOR
+            if (adType != null)
+            {
+                var method = adType.GetMethod("LoadAssetAtPath", new[] { typeof(string), typeof(System.Type) });
+                if (method != null)
+                {
+                    foreach (var alt in new[]
+                             {
+                                 "Assets/Bundles/VFX/Fireball.prefab",
+                                 "Assets/Bundles/VFX/FireBall.prefab"
+                             })
+                    {
+                        var prefab = method.Invoke(null, new object[] { alt, typeof(GameObject) }) as GameObject;
+                        if (prefab != null)
                         {
-                            object result = method.IsStatic
-                                ? method.Invoke(null, method.GetParameters().Length == 2
-                                    ? new object[] { path, typeof(GameObject) }
-                                    : new object[] { path })
-                                : method.Invoke(instance, method.GetParameters().Length == 2
-                                    ? new object[] { path, typeof(GameObject) }
-                                    : new object[] { path });
-
-                            if (result is GameObject go)
-                                return go;
+                            _cachedPrefab = prefab;
+                            return _cachedPrefab;
                         }
                     }
                 }
             }
-            catch
-            {
-                // ignore – fallback will be used
-            }
+#endif
 
             return null;
-        }
-
-        private static GameObject CreateFallbackSphere()
-        {
-            if (_fallbackSpherePrefab == null)
-            {
-                var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                go.name = "FireballFallback";
-                Object.Destroy(go.GetComponent<Collider>());
-                var r = go.GetComponent<Renderer>();
-                if (r != null)
-                {
-                    // Unlit-ish orange so it is obvious
-                    var mat = new Material(Shader.Find("Universal Render Pipeline/Lit")
-                                           ?? Shader.Find("Standard")
-                                           ?? Shader.Find("Sprites/Default"));
-                    if (mat != null)
-                    {
-                        mat.color = new Color(1f, 0.45f, 0.08f, 1f);
-                        if (mat.HasProperty("_EmissionColor"))
-                        {
-                            mat.EnableKeyword("_EMISSION");
-                            mat.SetColor("_EmissionColor", new Color(1f, 0.35f, 0.05f) * 2.5f);
-                        }
-                        r.sharedMaterial = mat;
-                    }
-                }
-                go.SetActive(false);
-                Object.DontDestroyOnLoad(go);
-                _fallbackSpherePrefab = go;
-            }
-
-            var instance = Object.Instantiate(_fallbackSpherePrefab);
-            instance.SetActive(true);
-            return instance;
         }
     }
 }
