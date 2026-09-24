@@ -54,35 +54,82 @@ namespace GameAct.Spatial
         }
 
         /// <summary>
-        /// 只挡墙：胸口 SphereCast。命中可走坡 → 当没撞到，整段位移放行。
-        /// 命中墙 → 停在墙前，不 Project 滑墙（避免弹）。
+        /// 只挡墙 + 贴墙滑动。
+        /// 1) 起点后退 Back，避免"已经贴墙 = 初始重叠"时 SphereCast 返回 distance=0、normal=-dir 的假法线。
+        /// 2) 撞墙后把剩余位移投影到墙切面继续走（最多 MaxIter 次），不再整段丢弃。
+        /// 3) 与墙的夹角是"平行/背离"时直接放行。
+        /// 4) 若已嵌入 Skin 内，只轻推出 ≤Skin，不会像深度穿透修正那样弹。
         /// </summary>
         public static Vector3 BlockWallsOnly(Vector3 position, Vector3 delta, float radius, int layerMask)
         {
             delta.y = 0f;
-            float dist = delta.magnitude;
-            if (dist < 1e-7f)
-                return position;
+            const int MaxIter = 3;
+            const float Back = 0.05f;
+            float r = radius * 0.85f;
+            Vector3 firstDir = delta.sqrMagnitude > 1e-12f ? delta.normalized : Vector3.zero;
 
-            Vector3 dir = delta / dist;
-            Vector3 origin = position + Vector3.up * ChestHeight;
-            float castDist = dist + Skin;
-
-            if (!Physics.SphereCast(
-                    origin, radius * 0.85f, dir,
-                    out RaycastHit hit, castDist,
-                    layerMask, QueryTriggerInteraction.Ignore))
+            for (int i = 0; i < MaxIter; i++)
             {
-                return position + delta;
+                float dist = delta.magnitude;
+                if (dist < 1e-6f) break;
+
+                Vector3 dir = delta / dist;
+                Vector3 origin = position + Vector3.up * ChestHeight;
+
+                if (!Physics.SphereCast(
+                        origin - dir * Back, r, dir,
+                        out RaycastHit hit, dist + Back + Skin,
+                        layerMask, QueryTriggerInteraction.Ignore))
+                {
+                    position += delta;
+                    break;
+                }
+
+                // 取法线：初始重叠时 hit.normal 不可信，用最近点重算
+                Vector3 n = hit.normal;
+                if (hit.distance <= 0f && hit.collider != null)
+                {
+                    Vector3 d = origin - hit.collider.ClosestPoint(origin);
+                    if (d.sqrMagnitude > 1e-8f) n = d.normalized;
+                }
+
+                // 地面/缓坡：放行，高度交给 Snap
+                if (n.y >= MinGroundNormalY)
+                {
+                    position += delta;
+                    break;
+                }
+
+                n.y = 0f;
+                if (n.sqrMagnitude < 1e-6f) break;
+                n.Normalize();
+
+                // 平行或背离墙：不算阻挡
+                if (Vector3.Dot(dir, n) >= -0.001f)
+                {
+                    position += delta;
+                    break;
+                }
+
+                // 走到接触点前
+                float gap = hit.distance - Back;                 // 球面到墙面的空隙(相对 Skin 的余量另算)
+                float travel = Mathf.Max(0f, gap - Skin);
+                position += dir * travel;
+
+                // 已嵌入 Skin 内：轻推出，最多 Skin
+                float embed = Skin - gap;
+                if (embed > 0f)
+                    position += n * Mathf.Min(embed, Skin);
+
+                // 剩余位移投影到墙切面 → 滑动
+                Vector3 remain = dir * (dist - travel);
+                delta = remain - n * Vector3.Dot(remain, n);
+
+                // 夹角/拐角保护：滑动方向与最初意图相反就停（避免来回抖）
+                if (Vector3.Dot(delta, firstDir) <= 0f) break;
             }
 
-            // 缓坡/地面：直接走过去，高度交给 Snap
-            if (hit.normal.y >= MinGroundNormalY)
-                return position + delta;
-
-            // 墙：停在接触点前，不滑、不推回
-            float travel = Mathf.Max(0f, hit.distance - Skin);
-            return position + dir * travel;
+            return position;
         }
 
         // 兼容旧名
