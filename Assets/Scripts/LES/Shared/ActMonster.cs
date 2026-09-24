@@ -1,5 +1,6 @@
 using LiteEntitySystem;
 using UnityEngine;
+using GameAct.Spatial;
 
 namespace GameAct.Les.Shared
 {
@@ -51,9 +52,7 @@ namespace GameAct.Les.Shared
         }
 
         /// <summary>
-        /// 权威击退：直接改 SyncVar 位置，View 下一帧 Apply 即可看到位移。
-        /// 仅在 Host/Solo 权威端调用；纯客户端改 transform 会被 LES 位姿覆盖。
-        /// 后期：Boss/大型怪可在入口短路（体重表 / 标记免疫）。
+        /// 权威击退：水平 Slide + 贴地，避免推进墙体。
         /// </summary>
         public void ApplyKnockback(Vector3 worldDir, float distance)
         {
@@ -63,8 +62,10 @@ namespace GameAct.Les.Shared
             if (worldDir.sqrMagnitude < 1e-8f) return;
             worldDir.Normalize();
 
-            var next = _position.Value + worldDir * distance;
-            _position.Value = SnapToGround(next);
+            var next = WorldMotor.MoveHorizontalAndSnap(
+                _position.Value, worldDir * distance,
+                WorldMotor.DefaultRadius * 0.9f, WorldMotor.DefaultHeight * 0.85f);
+            _position.Value = next;
         }
 
         protected override void Update()
@@ -73,11 +74,13 @@ namespace GameAct.Les.Shared
             if (_dead) return;
             float dt = EntityManager.DeltaTimeF;
             if (_moveDir.sqrMagnitude <= 0.0001f) return;
-            var delta = _moveDir * (MoveSpeed * dt);
-            var next = _position.Value + new Vector3(delta.x, 0f, delta.z);
-            _position.Value = SnapToGround(next);
+            var delta = new Vector3(_moveDir.x, 0f, _moveDir.z) * (MoveSpeed * dt);
+            _position.Value = WorldMotor.MoveHorizontalAndSnap(
+                _position.Value, delta,
+                WorldMotor.DefaultRadius * 0.9f, WorldMotor.DefaultHeight * 0.85f);
         }
 
+        /* ---- 旧仅 Snap 贴地（无水平挡墙）----
         static Vector3 SnapToGround(Vector3 pos)
         {
             var origin = pos + Vector3.up * 3f;
@@ -85,5 +88,6 @@ namespace GameAct.Les.Shared
                 return hit.point + Vector3.up * 0.05f;
             return new Vector3(pos.x, Mathf.Max(pos.y, 0.05f), pos.z);
         }
+        ---- */
     }
 }

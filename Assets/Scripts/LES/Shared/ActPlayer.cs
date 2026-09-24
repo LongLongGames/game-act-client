@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using GameAct.Gameplay.Camera;
 using GameAct.Input;
+using GameAct.Spatial;
 
 namespace GameAct.Les.Shared
 {
@@ -145,9 +146,17 @@ namespace GameAct.Les.Shared
             }
 
             _velocity.y += Gravity * dt;
-            var next = _position.Value + _velocity * dt;
-            next = Snap(next, ref _velocity, ref _grounded);
-            _position.Value = next;
+
+            // 水平只挡墙；Y 只在空中积分，贴地交给 Snap（避免每帧插入地面再弹回导致抖）
+            Vector3 horiz = new Vector3(_velocity.x, 0f, _velocity.z) * dt;
+            Vector3 pos = _position.Value;
+            float velY = _velocity.y;
+            if (!_grounded)
+                pos.y += velY * dt;
+            pos = WorldMotor.SlideMove(pos, horiz, WorldMotor.DefaultRadius, WorldMotor.DefaultHeight, WorldMotor.EnvironmentMask);
+            pos = WorldMotor.SnapToGround(pos, ref velY, ref _grounded, WorldMotor.EnvironmentMask);
+            _velocity.y = velY;
+            _position.Value = pos;
         }
 
         /// <summary>
@@ -198,6 +207,7 @@ namespace GameAct.Les.Shared
             ---- */
         }
 
+        /* ---- 旧仅向下 Raycast 贴地（无水平挡墙，侧面可穿进斜坡）----
         static Vector3 Snap(Vector3 pos, ref Vector3 vel, ref bool grounded)
         {
             var origin = pos + Vector3.up * 2f;
@@ -210,5 +220,7 @@ namespace GameAct.Les.Shared
             grounded = false;
             return pos;
         }
+        ---- */
+
     }
 }
