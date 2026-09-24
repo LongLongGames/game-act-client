@@ -1,70 +1,44 @@
 using LiteEntitySystem;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using GameAct.Gameplay.Camera;
 
 namespace GameAct.Les.Shared
 {
     /// <summary>
     /// 人类控制器：Client 在 VisualUpdate 写 PendingInput；权威在 BeforeControlledUpdate 应用到 ActPlayer。
     /// 手感对齐 UnityExample：
-    /// - 鼠标控制 Yaw
+    /// - 鼠标控制 Yaw（由 LocalLookInput 每渲染帧累加，这里只读当前值）
     /// - WASD 相对当前 Yaw 移动
-    /// - Esc 切换光标锁定
+    /// - Esc 切换光标锁定（由 LocalLookInput 处理）
     /// </summary>
     public class ActPlayerController : HumanControllerLogic<ActPlayerInput, ActPlayer>
     {
-        float _yaw;
-        float _mouseSensitivity = 2.0f;
-        bool _cursorLocked = true;
-        bool _yawInited;
-
         public ActPlayerController(EntityParams entityParams) : base(entityParams)
         {
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
+            // 光标锁定交给 LocalLookInput.Begin。
+            // 注意：Host 上每个远端玩家也会 new 一个 Controller，构造函数里不能再碰 Cursor。
         }
 
         protected override void VisualUpdate()
         {
             if (ControlledEntity == null) return;
 
-            // Esc 切换光标
-            var kb = Keyboard.current;
-            if (kb != null && kb.escapeKey.wasPressedThisFrame)
-            {
-                _cursorLocked = !_cursorLocked;
-                Cursor.lockState = _cursorLocked ? CursorLockMode.Locked : CursorLockMode.None;
-                Cursor.visible = !_cursorLocked;
-            }
+            float yaw = LocalLookInput.Yaw;
 
-            if (!_cursorLocked)
+            if (!LocalLookInput.CursorLocked)
             {
                 // 光标解锁时仍写当前 yaw，避免输入断流
                 ref var idle = ref ModifyPendingInput();
-                idle = ActPlayerInput.FromAxes(0f, 0f, _yaw, false, false);
+                idle = ActPlayerInput.FromAxes(0f, 0f, yaw, false, false);
                 return;
-            }
-
-            // 初始化 yaw（首次接管时对齐实体）
-            if (!_yawInited)
-            {
-                _yaw = ControlledEntity.Yaw;
-                _yawInited = true;
-            }
-
-            // 鼠标 Look（与 UnityExample 一致）
-            // Input System delta 为像素，*0.1 体感接近旧 Input.GetAxis * 2.0
-            var mouse = Mouse.current;
-            if (mouse != null)
-            {
-                float mouseX = mouse.delta.x.ReadValue() * _mouseSensitivity * 0.1f;
-                _yaw += mouseX;
             }
 
             // 键盘 / 手柄移动（本地坐标）
             float x = 0f, y = 0f;
             bool sprint = false, jump = false;
 
+            var kb = Keyboard.current;
             if (kb != null)
             {
                 if (kb.aKey.isPressed || kb.leftArrowKey.isPressed) x -= 1f;
@@ -82,15 +56,10 @@ namespace GameAct.Les.Shared
                 if (stick.sqrMagnitude > 0.01f) { x = stick.x; y = stick.y; }
                 if (pad.leftShoulder.isPressed || pad.leftStickButton.isPressed) sprint = true;
                 if (pad.buttonSouth.wasPressedThisFrame) jump = true;
-
-                // 右摇杆也可转视角（可选）
-                var look = pad.rightStick.ReadValue();
-                if (look.sqrMagnitude > 0.01f)
-                    _yaw += look.x * _mouseSensitivity * 2.5f;
             }
 
             ref var pending = ref ModifyPendingInput();
-            pending = ActPlayerInput.FromAxes(x, y, _yaw, sprint, jump);
+            pending = ActPlayerInput.FromAxes(x, y, yaw, sprint, jump);
         }
 
         protected override void BeforeControlledUpdate()

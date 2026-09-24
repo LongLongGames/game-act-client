@@ -1,6 +1,7 @@
 using LiteEntitySystem;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using GameAct.Gameplay.Camera;
 
 namespace GameAct.Les.Shared
 {
@@ -35,7 +36,7 @@ namespace GameAct.Les.Shared
         bool _driveLocally;
         ActPlayerInput _cmd;
 
-        /// <summary>上一帧的视线 Yaw（来自鼠标，本地相机用，不单独同步）。</summary>
+        /// <summary>最近一个 tick 采样到的视线 Yaw（来自 LocalLookInput，不单独同步）。相机不要用它，相机每帧读 LocalLookInput。</summary>
         float _lookYaw;
 
         // 平A 索敌：强制身体朝向
@@ -47,6 +48,12 @@ namespace GameAct.Les.Shared
         public float Yaw => _yaw.Value;
         /// <summary>视线 / 相机朝向（鼠标）。本地移动与相机都用这个。</summary>
         public float LookYaw => _lookYaw;
+
+        /// <summary>
+        /// true = 本端是权威（Solo / Host），SyncVar 只有 tick 阶梯值，表现层需要自己做渲染插值；
+        /// false = Client，用 InterpolatedValue 即可。
+        /// </summary>
+        public bool RenderNeedsSmoothing => !EntityManager.IsClient;
         public Vector3 Velocity => _velocity;
         public bool DriveLocally => _driveLocally;
 
@@ -142,37 +149,17 @@ namespace GameAct.Les.Shared
             _position.Value = next;
         }
 
-        static float s_localYaw;
-        static bool s_localYawInited;
-        static bool s_cursorLocked = true;
-
+        /// <summary>
+        /// Solo / Host 本地输入采样（在逻辑 tick 里调用）。
+        /// 视角 yaw 不在这里累加——由 LocalLookInput 按渲染帧累加，这里只读当前值，
+        /// 否则 30Hz 的 tick 会漏掉没跑 tick 的帧的鼠标增量。
+        /// </summary>
         static ActPlayerInput ReadLocalInput()
         {
             var kb = Keyboard.current;
-            if (kb != null && kb.escapeKey.wasPressedThisFrame)
-            {
-                s_cursorLocked = !s_cursorLocked;
-                Cursor.lockState = s_cursorLocked ? CursorLockMode.Locked : CursorLockMode.None;
-                Cursor.visible = !s_cursorLocked;
-            }
-
-            if (!s_localYawInited)
-            {
-                s_localYaw = 0f;
-                s_localYawInited = true;
-                Cursor.lockState = CursorLockMode.Locked;
-                Cursor.visible = false;
-            }
-
-            if (s_cursorLocked)
-            {
-                var mouse = Mouse.current;
-                if (mouse != null)
-                    s_localYaw += mouse.delta.x.ReadValue() * 2.0f * 0.1f;
-            }
 
             float x = 0f, y = 0f;
-            bool sprint = false, jump = false;
+            bool sprint = false;
 
             if (kb != null)
             {
@@ -181,7 +168,6 @@ namespace GameAct.Les.Shared
                 if (kb.sKey.isPressed || kb.downArrowKey.isPressed) y -= 1f;
                 if (kb.wKey.isPressed || kb.upArrowKey.isPressed) y += 1f;
                 sprint = kb.leftShiftKey.isPressed;
-                jump = kb.spaceKey.wasPressedThisFrame;
             }
 
             var pad = Gamepad.current;
@@ -190,13 +176,16 @@ namespace GameAct.Les.Shared
                 var stick = pad.leftStick.ReadValue();
                 if (stick.sqrMagnitude > 0.01f) { x = stick.x; y = stick.y; }
                 if (pad.leftShoulder.isPressed || pad.leftStickButton.isPressed) sprint = true;
-                if (pad.buttonSouth.wasPressedThisFrame) jump = true;
-                var look = pad.rightStick.ReadValue();
-                if (look.sqrMagnitude > 0.01f)
-                    s_localYaw += look.x * 2.0f * 2.5f;
             }
 
-            return ActPlayerInput.FromAxes(x, y, s_localYaw, sprint, jump);
+            // 光标解锁（Esc）时不响应移动，和 Client 路径保持一致
+            if (!LocalLookInput.CursorLocked)
+            {
+                x = 0f; y = 0f; sprint = false;
+            }
+
+            bool jump = LocalLookInput.ConsumeJump();
+            return ActPlayerInput.FromAxes(x, y, LocalLookInput.Yaw, sprint, jump);
         }
 
         static Vector3 Snap(Vector3 pos, ref Vector3 vel, ref bool grounded)

@@ -20,6 +20,8 @@ namespace GameAct.Gameplay
         SessionMode _mode = SessionMode.Solo;
         PlayerView _localView;
         ThirdPersonCamera _camera;
+        PoseSmoother _poseSmoother;
+        bool _poseInited;
         bool _started;
         string _levelSceneName = "Map1";
         LesAuthoritySession _lesSolo;
@@ -74,11 +76,20 @@ namespace GameAct.Gameplay
             else
                 _localView.ApplyPose(spawnPos, 0f, 0f);
 
+            // 视角输入：每渲染帧累加，相机与逻辑采样共用同一份 yaw/pitch。
+            LocalLookInput.Begin(yaw: 0f, pitch: 12f);
+
+            _poseSmoother = new PoseSmoother(LesTypesMapFactory.TickRate);
+            _poseInited = false;
+
             _camera = ThirdPersonCamera.EnsureMain();
             if (_lesLocalPlayer != null)
             {
-                _camera.SetTargetPose(_lesLocalPlayer.Position, _lesLocalPlayer.LookYaw);
+                // Client 模式此时还没有本地玩家，等 Update 里找到后再对齐。
+                _poseSmoother.Reset(_lesLocalPlayer.Position, _lesLocalPlayer.Yaw);
+                _camera.SetTargetPosition(_lesLocalPlayer.Position);
                 _camera.SnapToTarget();
+                _poseInited = true;
             }
 
             EnsureCombatDriver(entityId);
@@ -149,6 +160,9 @@ namespace GameAct.Gameplay
                 _localView = null;
             }
             _camera = null;
+            _poseSmoother = null;
+            _poseInited = false;
+            LocalLookInput.End();
             _net = null;
             _mode = SessionMode.Solo;
             _started = false;
@@ -165,14 +179,36 @@ namespace GameAct.Gameplay
 
             if (_lesLocalPlayer != null && !_lesLocalPlayer.IsDestroyed && _localView != null)
             {
-                var pos = _lesLocalPlayer.InterpolatedPosition;
-                var bodyYaw = _lesLocalPlayer.InterpolatedYaw;
+                Vector3 pos;
+                float bodyYaw;
+
+                if (_lesLocalPlayer.RenderNeedsSmoothing)
+                {
+                    // Solo / Host：SyncVar 只有 30Hz 阶梯值，自己做渲染插值。
+                    if (!_poseInited)
+                        _poseSmoother.Reset(_lesLocalPlayer.Position, _lesLocalPlayer.Yaw);
+                    _poseSmoother.Advance(_lesLocalPlayer.Position, _lesLocalPlayer.Yaw, Time.deltaTime);
+                    pos = _poseSmoother.Position;
+                    bodyYaw = _poseSmoother.Yaw;
+                }
+                else
+                {
+                    // Client：LES 已经插值好了，别再叠一层。
+                    pos = _lesLocalPlayer.InterpolatedPosition;
+                    bodyYaw = _lesLocalPlayer.InterpolatedYaw;
+                }
+
                 var v = _lesLocalPlayer.Velocity;
                 float speedXZ = new Vector2(v.x, v.z).magnitude;
                 _localView.ApplyPose(pos, bodyYaw, speedXZ);
 
                 if (_camera != null)
-                    _camera.SetTargetPose(pos, _lesLocalPlayer.LookYaw);
+                {
+                    _camera.SetTargetPosition(pos);
+                    if (!_poseInited)
+                        _camera.SnapToTarget();
+                }
+                _poseInited = true;
             }
         }
 

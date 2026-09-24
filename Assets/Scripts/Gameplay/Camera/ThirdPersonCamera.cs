@@ -4,47 +4,61 @@ namespace GameAct.Gameplay.Camera
 {
     /// <summary>
     /// 渲染相机（RenderCamera）。
-    /// 每帧读取 LogicCamera 的理想目标，做 SmoothDamp + LookAt。
-    /// 与 UnityExample 的 ClientPlayerView.LateUpdate 手感对齐。
+    ///
+    /// 输入分两路，各走各的：
+    /// - 【朝向】yaw / pitch 每帧直接读 LocalLookInput，1:1 跟手，不做任何平滑、不经过逻辑 tick。
+    /// - 【位置】只平滑「焦点」（角色位置）的跟随，再在焦点上按 yaw/pitch 做刚性环绕。
+    ///   这样鼠标转视角不会被位置平滑拖出迟滞/甩动，跑动时也只有跟随的轻微拖尾。
+    ///
+    /// 调用方（GameplayRunner）必须每个渲染帧把「已经过渲染插值」的角色位置传进来，
+    /// 不能传 30Hz 逻辑 tick 的阶梯位置——否则再怎么平滑也会抖。
     /// </summary>
-    [DefaultExecutionOrder(100)] // 尽量在角色位姿更新之后
+    [DefaultExecutionOrder(100)] // 在角色位姿写入之后
     public class ThirdPersonCamera : MonoBehaviour
     {
         [Header("Follow Target")]
         [SerializeField] Transform _followTarget; // 可选：直接跟 Transform
-        [SerializeField] bool _useLogicCamera = true;
 
-        [Header("Orbit (与 UnityExample 一致)")]
+        [Header("Orbit")]
         [SerializeField] float _cameraDistance = 6f;
-        [SerializeField] float _cameraHeight = 2.5f;
         [SerializeField] float _lookAtHeight = 1.5f;
-        [SerializeField] float _smoothTime = 0.1f;
+        [Tooltip("焦点跟随平滑时间（秒）。0 = 刚性跟随。角色位置已插值时 0.05~0.1 即可。")]
+        [SerializeField] float _followSmoothTime = 0.08f;
+        [Tooltip("焦点与目标相距超过该值视为传送，直接瞬移。")]
+        [SerializeField] float _teleportSnapDistance = 20f;
+
+        [Header("Look Limits")]
+        [SerializeField] float _minPitch = -10f;
+        [SerializeField] float _maxPitch = 65f;
+        [SerializeField] float _mouseDegPerPixel = 0.1f;
 
         [Header("Camera Setup")]
         [SerializeField] bool _forcePerspective = true;
         [SerializeField] float _fieldOfView = 60f;
 
         readonly LogicCamera _logic = new LogicCamera();
-        Vector3 _dampVelocity;
         UnityEngine.Camera _cam;
 
-        // 外部驱动接口（推荐）
-        Vector3 _playerPos;
-        float _playerYaw;
-        bool _hasExternalPose;
+        Vector3 _targetPos;
+        bool _hasExternalTarget;
+
+        Vector3 _focus;
+        Vector3 _focusVelocity;
+        bool _focusInited;
 
         public LogicCamera Logic => _logic;
+
+        public float Yaw => LocalLookInput.Yaw;
+        public float Pitch => LocalLookInput.Pitch;
+
+        /// <summary>视线水平前方 / 右方，瞄准、索敌用。</summary>
+        public Vector3 PlanarForward => _logic.PlanarForward;
+        public Vector3 PlanarRight => _logic.PlanarRight;
 
         public float CameraDistance
         {
             get => _cameraDistance;
-            set { _cameraDistance = value; _logic.Distance = value; }
-        }
-
-        public float CameraHeight
-        {
-            get => _cameraHeight;
-            set { _cameraHeight = value; _logic.Height = value; }
+            set { _cameraDistance = Mathf.Max(0.5f, value); _logic.Distance = _cameraDistance; }
         }
 
         public float LookAtHeight
@@ -55,8 +69,8 @@ namespace GameAct.Gameplay.Camera
 
         public float SmoothTime
         {
-            get => _smoothTime;
-            set => _smoothTime = Mathf.Max(0.01f, value);
+            get => _followSmoothTime;
+            set => _followSmoothTime = Mathf.Max(0f, value);
         }
 
         void Awake()
@@ -73,80 +87,88 @@ namespace GameAct.Gameplay.Camera
                 _cam.farClipPlane = 200f;
             }
 
-            SyncLogicSettings();
+            SyncSettings();
         }
 
-        void SyncLogicSettings()
+        void SyncSettings()
         {
             _logic.Distance = _cameraDistance;
-            _logic.Height = _cameraHeight;
             _logic.LookAtHeight = _lookAtHeight;
+            LocalLookInput.MinPitch = _minPitch;
+            LocalLookInput.MaxPitch = _maxPitch;
+            LocalLookInput.MouseDegPerPixel = _mouseDegPerPixel;
         }
 
         /// <summary>
-        /// 由 GameplayRunner / 本地玩家驱动：传入逻辑位姿。
-        /// 优先于 FollowTarget。
+        /// 每个渲染帧调用：传入【渲染插值后】的角色位置。朝向不用传，相机自己读 LocalLookInput。
         /// </summary>
-        public void SetTargetPose(Vector3 position, float yawDegrees)
+        public void SetTargetPosition(Vector3 position)
         {
-            _playerPos = position;
-            _playerYaw = yawDegrees;
-            _hasExternalPose = true;
+            _targetPos = position;
+            _hasExternalTarget = true;
+        }
+
+        [System.Obsolete("yaw 由 LocalLookInput 提供，该参数被忽略；请改用 SetTargetPosition。")]
+        public void SetTargetPose(Vector3 position, float yawDegreesIgnored)
+        {
+            SetTargetPosition(position);
         }
 
         public void SetFollowTarget(Transform t)
         {
             _followTarget = t;
-            _hasExternalPose = false;
+            _hasExternalTarget = false;
+        }
+
+        bool TryGetTarget(out Vector3 pos)
+        {
+            if (_hasExternalTarget) { pos = _targetPos; return true; }
+            if (_followTarget != null) { pos = _followTarget.position; return true; }
+            pos = default;
+            return false;
         }
 
         void LateUpdate()
         {
-            SyncLogicSettings();
+            if (!TryGetTarget(out var target)) return;
 
-            Vector3 pos;
-            float yaw;
+            SyncSettings();
 
-            if (_hasExternalPose)
+            if (!_focusInited)
             {
-                pos = _playerPos;
-                yaw = _playerYaw;
+                _focus = target;
+                _focusVelocity = Vector3.zero;
+                _focusInited = true;
             }
-            else if (_followTarget != null)
+            else if (_followSmoothTime <= 0f
+                     || (target - _focus).sqrMagnitude > _teleportSnapDistance * _teleportSnapDistance)
             {
-                pos = _followTarget.position;
-                yaw = _followTarget.eulerAngles.y;
+                _focus = target;
+                _focusVelocity = Vector3.zero;
             }
             else
             {
-                return;
+                _focus = Vector3.SmoothDamp(_focus, target, ref _focusVelocity, _followSmoothTime);
             }
 
-            _logic.UpdateFromPlayer(pos, yaw);
-
-            // 平滑位置（与 UnityExample SmoothDamp 一致）
-            transform.position = Vector3.SmoothDamp(
-                transform.position,
-                _logic.Position,
-                ref _dampVelocity,
-                _smoothTime);
-
-            // 朝向：直接 LookAt 逻辑注视点（示例也是如此，无额外平滑旋转）
-            transform.LookAt(_logic.LookAtPoint);
+            Apply();
         }
 
-        /// <summary>立刻跳到目标位置（传送、切场景用）。</summary>
+        void Apply()
+        {
+            _logic.UpdateFromLook(_focus, LocalLookInput.Yaw, LocalLookInput.Pitch);
+            transform.SetPositionAndRotation(_logic.Position, _logic.Rotation);
+        }
+
+        /// <summary>立刻跳到目标位置（开局、传送、切场景用）。</summary>
         public void SnapToTarget()
         {
-            if (!_hasExternalPose && _followTarget == null) return;
-
-            Vector3 pos = _hasExternalPose ? _playerPos : _followTarget.position;
-            float yaw = _hasExternalPose ? _playerYaw : _followTarget.eulerAngles.y;
-
-            _logic.UpdateFromPlayer(pos, yaw);
-            transform.position = _logic.Position;
-            transform.LookAt(_logic.LookAtPoint);
-            _dampVelocity = Vector3.zero;
+            if (!TryGetTarget(out var target)) return;
+            SyncSettings();
+            _focus = target;
+            _focusVelocity = Vector3.zero;
+            _focusInited = true;
+            Apply();
         }
 
         /// <summary>确保场景里有一个主相机并挂上本组件。</summary>
