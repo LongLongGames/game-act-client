@@ -3,6 +3,7 @@ using UnityEngine.InputSystem;
 using GameAct.Spatial;
 using GameAct.Gameplay.Player;
 using GameAct.Les.Shared;
+using GameAct.Input;
 
 namespace GameAct.Skill
 {
@@ -172,11 +173,13 @@ namespace GameAct.Skill
                 KnockbackDistance = 0f
             };
 
+            // ---- GameInput：Attack / Skill1 / Skill2（键鼠+手柄同一 Action）----
+            bool fireMelee = GameInput.AttackPressed;
+            // 调试扩展：数字键 1 仍可平A（与 Attack 等价）
             var kb = Keyboard.current;
-            var mouse = Mouse.current;
+            if (kb != null && kb.digit1Key.wasPressedThisFrame)
+                fireMelee = true;
 
-            bool fireMelee = (kb != null && kb.digit1Key.wasPressedThisFrame)
-                             || (mouse != null && mouse.leftButton.wasPressedThisFrame);
             if (fireMelee)
             {
                 // 范围内自动索敌最近 → 改 CasterForward + 身体转向
@@ -205,31 +208,39 @@ namespace GameAct.Skill
                 }
             }
 
-            if (kb == null) return;
-            if (kb.digit2Key.wasPressedThisFrame)
+            // Skill1 = Rail(2)，Skill2 = Fireball(3)；数字键 2~5 保留调试
+            if (GameInput.Skill1Pressed || (kb != null && kb.digit2Key.wasPressedThisFrame))
             {
                 ctx.KnockbackDistance = _caster.ResolveKnockback(_defHitscan);
                 if (_caster.TryCast(2, ctx))
                     CaptureGizmo(2, pos, fwd, _defHitscan);
             }
-            if (kb.digit3Key.wasPressedThisFrame)
+            if (GameInput.Skill2Pressed || (kb != null && kb.digit3Key.wasPressedThisFrame))
             {
                 ctx.KnockbackDistance = _caster.ResolveKnockback(_defProjectile);
                 if (_caster.TryCast(3, ctx))
                     CaptureGizmo(3, pos, fwd, _defProjectile);
             }
-            if (kb.digit4Key.wasPressedThisFrame)
+            if (kb != null && kb.digit4Key.wasPressedThisFrame)
             {
                 ctx.KnockbackDistance = _caster.ResolveKnockback(_defMeteor);
                 if (_caster.TryCast(4, ctx))
                     CaptureGizmo(4, pos, fwd, _defMeteor);
             }
-            if (kb.digit5Key.wasPressedThisFrame)
+            if (kb != null && kb.digit5Key.wasPressedThisFrame)
             {
                 ctx.KnockbackDistance = _caster.ResolveKnockback(_defZone);
                 if (_caster.TryCast(5, ctx))
                     CaptureGizmo(5, pos, fwd, _defZone);
             }
+
+            /* ---- 旧硬编码 ----
+            var mouse = Mouse.current;
+            bool fireMeleeOld = (kb != null && kb.digit1Key.wasPressedThisFrame)
+                             || (mouse != null && mouse.leftButton.wasPressedThisFrame);
+            if (kb == null) return;
+            if (kb.digit2Key.wasPressedThisFrame) { ... }
+            ---- */
         }
 
         /// <summary>

@@ -2,14 +2,15 @@ using LiteEntitySystem;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using GameAct.Gameplay.Camera;
+using GameAct.Input;
 
 namespace GameAct.Les.Shared
 {
     /// <summary>
     /// LES 玩家 Pawn。
     /// 控制手感（动作 / RoR2 向）：
-    /// - 鼠标控制「视线 / 相机 Yaw」（Input.Rotation）
-    /// - WASD 相对视线方向移动
+    /// - 视线 Yaw 来自 LocalLookInput（键鼠/手柄无缝）
+    /// - WASD / 左摇杆相对视线方向移动（GameInput.Move）
     /// - 角色模型朝向移动方向转身（有转向速度），按 A/S/D 会转过去
     /// - 平A 索敌时 RequestFaceDirection：身体优先转向目标，持续 FaceHold 秒
     /// </summary>
@@ -105,7 +106,7 @@ namespace GameAct.Les.Shared
         {
             if (dt <= 0f) return;
 
-            // 视线 Yaw = 鼠标（用于相对移动 + 本地相机）
+            // 视线 Yaw = LocalLookInput（用于相对移动 + 本地相机）
             _lookYaw = _cmd.Rotation;
 
             // 本地输入 → 相对视线的世界速度
@@ -151,16 +152,31 @@ namespace GameAct.Les.Shared
 
         /// <summary>
         /// Solo / Host 本地输入采样（在逻辑 tick 里调用）。
-        /// 视角 yaw 不在这里累加——由 LocalLookInput 按渲染帧累加，这里只读当前值，
-        /// 否则 30Hz 的 tick 会漏掉没跑 tick 的帧的鼠标增量。
+        /// 视角 yaw 不在这里累加——由 LocalLookInput 按渲染帧累加，这里只读当前值。
         /// </summary>
         static ActPlayerInput ReadLocalInput()
         {
-            var kb = Keyboard.current;
+            Vector2 move = GameInput.Move;
+            float x = move.x, y = move.y;
+            if (move.sqrMagnitude > 1f)
+            {
+                move.Normalize();
+                x = move.x;
+                y = move.y;
+            }
 
+            bool sprint = GameInput.SprintHeld;
+            bool jump = LocalLookInput.ConsumeJump() || GameInput.JumpPressed;
+
+            if (!LocalLookInput.CursorLocked)
+                return ActPlayerInput.FromAxes(0f, 0f, LocalLookInput.Yaw, false, false);
+
+            return ActPlayerInput.FromAxes(x, y, LocalLookInput.Yaw, sprint, jump);
+
+            /* ---- 旧硬编码（已由 GameInput + LocalLookInput 替代）----
+            var kb = Keyboard.current;
             float x = 0f, y = 0f;
             bool sprint = false;
-
             if (kb != null)
             {
                 if (kb.aKey.isPressed || kb.leftArrowKey.isPressed) x -= 1f;
@@ -169,7 +185,6 @@ namespace GameAct.Les.Shared
                 if (kb.wKey.isPressed || kb.upArrowKey.isPressed) y += 1f;
                 sprint = kb.leftShiftKey.isPressed;
             }
-
             var pad = Gamepad.current;
             if (pad != null)
             {
@@ -177,15 +192,10 @@ namespace GameAct.Les.Shared
                 if (stick.sqrMagnitude > 0.01f) { x = stick.x; y = stick.y; }
                 if (pad.leftShoulder.isPressed || pad.leftStickButton.isPressed) sprint = true;
             }
-
-            // 光标解锁（Esc）时不响应移动，和 Client 路径保持一致
-            if (!LocalLookInput.CursorLocked)
-            {
-                x = 0f; y = 0f; sprint = false;
-            }
-
+            if (!LocalLookInput.CursorLocked) { x = 0f; y = 0f; sprint = false; }
             bool jump = LocalLookInput.ConsumeJump();
             return ActPlayerInput.FromAxes(x, y, LocalLookInput.Yaw, sprint, jump);
+            ---- */
         }
 
         static Vector3 Snap(Vector3 pos, ref Vector3 vel, ref bool grounded)

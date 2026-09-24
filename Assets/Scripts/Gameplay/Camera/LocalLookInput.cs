@@ -1,13 +1,14 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using GameAct.Input;
 
 namespace GameAct.Gameplay.Camera
 {
     /// <summary>
-    /// 本地玩家的「视角输入」唯一来源：鼠标 / 右摇杆 → Yaw、Pitch。
+    /// 本地玩家的「视角输入」唯一来源：Look Action（鼠标 delta / 右摇杆）→ Yaw、Pitch。
     ///
     /// 为什么要单独抽出来：
-    /// - 视角必须按【渲染帧】累加（每帧读一次 mouse.delta），相机每帧直接读它，才会丝滑。
+    /// - 视角必须按【渲染帧】累加（每帧读一次 Look），相机每帧直接读它，才会丝滑。
     /// - 逻辑层（ActPlayer / ActPlayerController）只在采样输入时【读取当前值】，
     ///   用它把 WASD 转成世界方向。逻辑 tick 是 30Hz，如果在 tick 里自己累加 mouse.delta，
     ///   没跑 tick 的帧的鼠标增量会丢，一帧跑两个 tick 又会重复累加。
@@ -94,25 +95,110 @@ namespace GameAct.Gameplay.Camera
         {
             if (!_active) return;
 
+            // Esc / 手柄 Start 切换光标
             var kb = Keyboard.current;
-            var pad = Gamepad.current;
-
             if (kb != null && kb.escapeKey.wasPressedThisFrame)
                 SetCursorLocked(!CursorLocked);
+            var pad = Gamepad.current;
+            if (pad != null && pad.startButton.wasPressedThisFrame)
+                SetCursorLocked(!CursorLocked);
 
-            if (kb != null && kb.spaceKey.wasPressedThisFrame) _jumpLatched = true;
-            if (pad != null && pad.buttonSouth.wasPressedThisFrame) _jumpLatched = true;
+            // Jump 锁存（Action：Space / 已绑定手柄键）
+            if (GameInput.JumpPressed)
+                _jumpLatched = true;
 
             if (!CursorLocked) return;
+
+            // Look：同一 Action 绑 Mouse/delta 与 Gamepad/rightStick。
+            // 语义不同（像素 vs -1~1），按 activeControl 设备分支；两路可同时累加（无缝切换）。
+            ApplyLookFromAction(dt);
+            ApplyLookDeviceFallback(dt);
+
+            Pitch = Mathf.Clamp(Pitch, MinPitch, MaxPitch);
+            if (Yaw > 360f) Yaw -= 360f;
+            else if (Yaw < -360f) Yaw += 360f;
+        }
+
+        static void ApplyLookFromAction(float dt)
+        {
+            if (!GameInput.IsReady) return;
+            var action = GameInput.Player.Look;
+            if (!action.enabled) return;
+
+            // 遍历本帧有值的控件，避免只读合成值导致鼠标/摇杆尺度混淆
+            var controls = action.controls;
+            for (int i = 0; i < controls.Count; i++)
+            {
+                var c = controls[i];
+                if (c == null || !c.IsActuated(0.01f)) continue;
+
+                Vector2 v = Vector2.zero;
+                if (c is InputControl<Vector2> vc)
+                    v = vc.ReadValue();
+                else
+                    continue;
+
+                if (c.device is Mouse)
+                {
+                    Yaw += v.x * MouseDegPerPixel;
+                    Pitch -= v.y * MouseDegPerPixel;
+                }
+                else if (c.device is Gamepad)
+                {
+                    if (v.sqrMagnitude > 0.01f)
+                    {
+                        Yaw += v.x * StickYawDegPerSec * dt;
+                        Pitch -= v.y * StickPitchDegPerSec * dt;
+                    }
+                }
+            }
+        }
+
+        /// <summary>Action 控件列表异常时的兜底（仍键鼠+手柄双通）。</summary>
+        static void ApplyLookDeviceFallback(float dt)
+        {
+            // 若 Action 已成功读到控件则不必再读设备；用静态标记避免双加
+            // 简化：仅在 Action 未启用时走设备
+            if (GameInput.IsReady && GameInput.Player.Look.enabled)
+                return;
 
             var mouse = Mouse.current;
             if (mouse != null)
             {
                 Vector2 d = mouse.delta.ReadValue();
                 Yaw += d.x * MouseDegPerPixel;
-                Pitch -= d.y * MouseDegPerPixel; // 鼠标上移 = 抬头 = pitch 变小
+                Pitch -= d.y * MouseDegPerPixel;
             }
 
+            var pad = Gamepad.current;
+            if (pad != null)
+            {
+                Vector2 s = pad.rightStick.ReadValue();
+                if (s.sqrMagnitude > 0.01f)
+                {
+                    Yaw += s.x * StickYawDegPerSec * dt;
+                    Pitch -= s.y * StickPitchDegPerSec * dt;
+                }
+            }
+        }
+
+        /* ---- 旧硬编码（已由 GameInput.Player.Look / Jump 替代）----
+        static void Tick_OLD(float dt)
+        {
+            var kb = Keyboard.current;
+            var pad = Gamepad.current;
+            if (kb != null && kb.escapeKey.wasPressedThisFrame)
+                SetCursorLocked(!CursorLocked);
+            if (kb != null && kb.spaceKey.wasPressedThisFrame) _jumpLatched = true;
+            if (pad != null && pad.buttonSouth.wasPressedThisFrame) _jumpLatched = true;
+            if (!CursorLocked) return;
+            var mouse = Mouse.current;
+            if (mouse != null)
+            {
+                Vector2 d = mouse.delta.ReadValue();
+                Yaw += d.x * MouseDegPerPixel;
+                Pitch -= d.y * MouseDegPerPixel;
+            }
             if (pad != null)
             {
                 Vector2 look = pad.rightStick.ReadValue();
@@ -122,11 +208,8 @@ namespace GameAct.Gameplay.Camera
                     Pitch -= look.y * StickPitchDegPerSec * dt;
                 }
             }
-
-            Pitch = Mathf.Clamp(Pitch, MinPitch, MaxPitch);
-            if (Yaw > 360f) Yaw -= 360f;
-            else if (Yaw < -360f) Yaw += 360f;
         }
+        ---- */
 
         /// <summary>最早执行，保证本帧后面所有脚本读到的都是本帧最新的视角。</summary>
         [DefaultExecutionOrder(-1000)]

@@ -7,6 +7,7 @@ using GameAct.Net;
 using GameAct.Les;
 using GameAct.Les.Shared;
 using GameAct.Skill;
+using GameAct.Input;
 
 namespace GameAct.Gameplay
 {
@@ -78,6 +79,7 @@ namespace GameAct.Gameplay
 
             // 视角输入：每渲染帧累加，相机与逻辑采样共用同一份 yaw/pitch。
             LocalLookInput.Begin(yaw: 0f, pitch: 12f);
+            GameInput.EnablePlayer();
 
             _poseSmoother = new PoseSmoother(LesTypesMapFactory.TickRate);
             _poseInited = false;
@@ -163,6 +165,7 @@ namespace GameAct.Gameplay
             _poseSmoother = null;
             _poseInited = false;
             LocalLookInput.End();
+            GameInput.DisablePlayer();
             _net = null;
             _mode = SessionMode.Solo;
             _started = false;
