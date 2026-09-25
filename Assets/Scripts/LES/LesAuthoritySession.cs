@@ -6,6 +6,7 @@ using UnityEngine.SceneManagement;
 using GameAct.Les.Shared;
 using GameAct.Skill;
 using GameAct.Les.View;
+using GameAct.Spatial;
 
 namespace GameAct.Les
 {
@@ -51,10 +52,16 @@ namespace GameAct.Les
 
             SpawnMonstersInternal(center, monsterCount, baseRadius: 6f);
 
+            // Flow Field：以开局中心建场并烘焙障碍，供怪物追击绕障
+            FlowFieldService.Reset();
+            FlowFieldService.Ensure(center, halfExtent: 48f, cellSize: FlowField.DefaultCellSize);
+            if (_localPlayer != null)
+                FlowFieldService.Tick(_localPlayer.Position, 0f);
+
             MonsterDeathService.AuthorityDestroyMonster = DestroyMonsterById;
             MonsterKnockbackService.AuthorityKnockback = KnockbackMonsterById;
             _started = true;
-            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={MonsterCount}");
+            Debug.Log($"[LES] Offline authority: player={_localPlayer.Id} monsters={MonsterCount} flowField=on");
         }
 
         /// <summary>
@@ -105,6 +112,11 @@ namespace GameAct.Les
         public void Tick()
         {
             if (!_started || _em == null) return;
+
+            // 以本地玩家为 Flow Field 目标，周期性重建
+            if (_localPlayer != null && !_localPlayer.IsDestroyed)
+                FlowFieldService.Tick(_localPlayer.Position, 1f / 30f);
+
             _em.Update();
             for (int i = _views.Count - 1; i >= 0; i--)
             {
@@ -158,6 +170,7 @@ namespace GameAct.Les
 
         public void Stop()
         {
+            FlowFieldService.Reset();
             MonsterDeathService.Clear();
             MonsterKnockbackService.Clear();
             _localPlayer = null;

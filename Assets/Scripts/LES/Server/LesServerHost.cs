@@ -7,6 +7,7 @@ using LiteNetLib;
 using LiteNetLib.Utils;
 using UnityEngine;
 using GameAct.Les.Shared;
+using GameAct.Spatial;
 using GameAct.Les.Transport;
 
 namespace GameAct.Les.Server
@@ -117,6 +118,22 @@ namespace GameAct.Les.Server
         {
             if (!_started) return;
             _manager?.PollEvents();
+
+            if (_em != null)
+            {
+                Vector3 target = default;
+                bool found = false;
+                foreach (var pl in _em.GetEntities<ActPlayer>())
+                {
+                    if (pl == null || pl.IsDestroyed) continue;
+                    target = pl.Position;
+                    found = true;
+                    break;
+                }
+                if (found)
+                    FlowFieldService.Tick(target, UnityEngine.Time.deltaTime);
+            }
+
             _em?.Update();
         }
 
@@ -130,6 +147,7 @@ namespace GameAct.Les.Server
             _em = null;
             _packetProcessor = null;
             _monstersSpawned = false;
+            FlowFieldService.Reset();
             _started = false;
             Log("Server stopped");
         }
@@ -149,7 +167,9 @@ namespace GameAct.Les.Server
                 _em.AddAIController<MonsterBotController>(c => c.StartControl(monster));
             }
             _monstersSpawned = true;
-            Log($"Spawned {n} monsters");
+            FlowFieldService.Ensure(center, halfExtent: 48f, cellSize: FlowField.DefaultCellSize);
+            FlowFieldService.Tick(center, 0f);
+            Log($"Spawned {n} monsters flowField=on");
         }
 
         void OnJoinReceived(JoinPacket join, NetPeer peer)

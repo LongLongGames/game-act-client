@@ -13,6 +13,7 @@ using GameAct.Les.Shared;
 using GameAct.Skill;
 using GameAct.Les.Transport;
 using GameAct.Les.View;
+using GameAct.Spatial;
 using GameAct.Net;
 
 namespace GameAct.Les
@@ -157,6 +158,7 @@ namespace GameAct.Les
             ClientEm = null;
             _packetProcessor = null;
             _enemiesSpawned = false;
+            FlowFieldService.Reset();
             _activeTransport = NetTransportKind.Udp;
 
             var was = IsConnected || Role != NetRole.None;
@@ -194,6 +196,22 @@ namespace GameAct.Les
             else
                 _manager?.PollEvents();
 
+            // Host 权威：以第一个存活玩家为 Flow Field 目标
+            if (ServerEm != null)
+            {
+                Vector3 target = default;
+                bool found = false;
+                foreach (var pl in ServerEm.GetEntities<ActPlayer>())
+                {
+                    if (pl == null || pl.IsDestroyed) continue;
+                    target = pl.Position;
+                    found = true;
+                    break;
+                }
+                if (found)
+                    FlowFieldService.Tick(target, 1f / 30f);
+            }
+
             ServerEm?.Update();
             ClientEm?.Update();
             SyncMonsterViews();
@@ -224,7 +242,12 @@ namespace GameAct.Les
             }
 
             _enemiesSpawned = true;
-            Log($"Spawned {n} LES enemies around {center}");
+
+            // Host 刷怪时初始化 Flow Field
+            FlowFieldService.Ensure(center, halfExtent: 48f, cellSize: FlowField.DefaultCellSize);
+            FlowFieldService.Tick(center, 0f);
+
+            Log($"Spawned {n} LES enemies around {center} flowField=on");
         }
 
         /// <summary>
