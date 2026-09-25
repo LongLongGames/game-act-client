@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using LiteEntitySystem;
 using UnityEngine;
 using GameAct.Spatial;
@@ -6,10 +7,9 @@ namespace GameAct.Les.Shared
 {
     /// <summary>
     /// 怪物基础 AI：
-    /// - Idle 游荡
-    /// - 仇恨范围进入 → Chase（优先 FlowField，无场则直线追）
-    /// - 超出脱战范围 → 回 Idle
-    /// - 近距离面向目标（为后续攻击预留）
+    /// - Idle 游荡 + Local Avoidance
+    /// - 仇恨范围进入 → Chase（FlowField / 直线）+ Local Avoidance
+    /// - 近战距离停步但仍侧向分离，形成围圈而非重叠
     /// </summary>
     public class MonsterBotController : AiControllerLogic<ActMonster>
     {
@@ -23,11 +23,17 @@ namespace GameAct.Les.Shared
         public static float IdleTurnMin = 0.7f;
         public static float IdleTurnMax = 2.2f;
 
+        /// <summary>是否启用邻居分离</summary>
+        public static bool EnableAvoidance = true;
+
         float _yaw;
         float _changeTimer;
         int _targetPlayerId = -1;
         Vector3 _lastKnownTargetPos;
         bool _hasAggro;
+
+        // 复用列表，避免每帧 GC
+        static readonly List<Vector3> _neighborBuf = new List<Vector3>(16);
 
         public MonsterBotController(EntityParams entityParams) : base(entityParams)
         {
@@ -43,6 +49,7 @@ namespace GameAct.Les.Shared
             if (pawn.IsDead)
             {
                 pawn.SetInput(Vector3.zero, pawn.Yaw);
+                // 丢失或超距 → 清仇恨
                 _hasAggro = false;
                 _targetPlayerId = -1;
                 return;
@@ -62,6 +69,7 @@ namespace GameAct.Les.Shared
             }
             else
             {
+                // 丢失或超距 → 清仇恨
                 _hasAggro = false;
                 _targetPlayerId = -1;
                 IdleWander(pawn, dt);
@@ -121,30 +129,43 @@ namespace GameAct.Les.Shared
             toTarget.y = 0f;
             float dist = toTarget.magnitude;
 
-            Vector3 dir;
-            // FlowField 优先（绕障）；无场或采样为零则直线
+            Vector3 desired;
             Vector3 flow = FlowFieldService.SampleDirection(myPos);
             if (flow.sqrMagnitude > 1e-4f)
-                dir = flow;
+                desired = flow;
             else if (dist > 0.001f)
-                dir = toTarget / dist;
+                desired = toTarget / dist;
             else
-                dir = Vector3.zero;
+                desired = Vector3.zero;
 
-            // 近身：停步、面向目标
+            // 进近战：不再前冲，只保留分离/侧移，避免叠成一团
             if (dist <= MeleeRange)
+                desired = Vector3.zero;
+
+            if (EnableAvoidance)
             {
-                dir = Vector3.zero;
+                CollectNeighborPositions(pawn, myPos);
+                Vector3 sep = LocalAvoidance.ComputeSeparation(myPos, _neighborBuf);
+                float w = LocalAvoidance.SeparationWeight;
+                if (dist <= MeleeRange * 1.25f)
+                    w *= 1.5f;
+                desired = LocalAvoidance.Blend(desired, sep, w);
+            }
+            else if (desired.sqrMagnitude > 1e-6f)
+            {
+                desired.Normalize();
             }
 
             float targetYaw;
             if (toTarget.sqrMagnitude > 1e-4f)
                 targetYaw = Mathf.Atan2(toTarget.x, toTarget.z) * Mathf.Rad2Deg;
+            else if (desired.sqrMagnitude > 1e-4f)
+                targetYaw = Mathf.Atan2(desired.x, desired.z) * Mathf.Rad2Deg;
             else
                 targetYaw = pawn.Yaw;
 
             _yaw = Mathf.MoveTowardsAngle(_yaw, targetYaw, 240f * dt);
-            pawn.SetInput(dir, _yaw);
+            pawn.SetInput(desired, _yaw);
         }
 
         void IdleWander(ActMonster pawn, float dt)
@@ -156,15 +177,46 @@ namespace GameAct.Les.Shared
                 _changeTimer = Random.Range(IdleTurnMin, IdleTurnMax);
             }
 
-            // 偶发停顿
             bool idle = Random.Range(0, 50) == 0;
-            Vector3 dir = Vector3.zero;
+            Vector3 desired = Vector3.zero;
             if (!idle)
             {
                 float rad = _yaw * Mathf.Deg2Rad;
-                dir = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad));
+                desired = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad));
             }
-            pawn.SetInput(dir, _yaw);
+
+            if (EnableAvoidance)
+            {
+                CollectNeighborPositions(pawn, pawn.Position);
+                Vector3 sep = LocalAvoidance.ComputeSeparation(pawn.Position, _neighborBuf);
+                desired = LocalAvoidance.Blend(desired, sep, LocalAvoidance.SeparationWeight);
+                if (desired.sqrMagnitude > 1e-4f)
+                    _yaw = Mathf.MoveTowardsAngle(
+                        _yaw,
+                        Mathf.Atan2(desired.x, desired.z) * Mathf.Rad2Deg,
+                        180f * dt);
+            }
+
+            pawn.SetInput(desired, _yaw);
+        }
+
+        void CollectNeighborPositions(ActMonster self, Vector3 myPos)
+        {
+            _neighborBuf.Clear();
+            float r = LocalAvoidance.SeparationRadius;
+            float rSq = r * r;
+            int selfId = self.Id;
+
+            foreach (var m in EntityManager.GetEntities<ActMonster>())
+            {
+                if (m == null || m.IsDestroyed || m.IsDead) continue;
+                if (m.Id == selfId) continue;
+                float dsq = HorizSq(myPos, m.Position);
+                if (dsq > rSq) continue;
+                _neighborBuf.Add(m.Position);
+                if (_neighborBuf.Count >= LocalAvoidance.MaxNeighbors)
+                    break;
+            }
         }
 
         static float HorizSq(Vector3 a, Vector3 b)
