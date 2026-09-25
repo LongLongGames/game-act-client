@@ -29,7 +29,7 @@
   1. 创建房间（Steam P2P Host）
   2. 加入房间（Lobby ServerList：官服 / 社区 VPS / Host 的 P2P 主机）
   3. 邀请好友（Steamworks）
-- **输入**：PC / 主机（后续接入组织 Input 组件）
+- **输入**：PC / 主机（键鼠 + 手柄已支持，后续可接组织 Input 组件）
 - **反作弊**：Low Priority（客户端不持有权威存档，只上报关键操作）
 
 ## 依赖与组件
@@ -41,7 +41,7 @@
 | [BugReport](https://github.com/setsuodu/BugReport) | 异常 / 反馈 | ✅ |
 | [Localization](https://github.com/setsuodu/Localization) | 多语言 | ✅ |
 | [Mail](https://github.com/setsuodu/Mail) | 游戏内邮件 | ✅ |
-| Input | PC / 主机输入 | 🚧 |
+| Input | PC / 主机输入（键鼠 + 手柄） | ✅ |
 
 ## 启动与联调
 
@@ -56,7 +56,7 @@
 
 ## 开发计划（与服务器对齐）
 
-### Phase 0 – 骨架（1~2 周）
+### Phase 0 – 骨架（1~2 周）✅
 - [x] 工程初始化（URP、基础场景、登录流）
 - [x] MP 登录 → JWT → 拉资料 / 存档
 - [x] 版本检查接口对接
@@ -71,18 +71,28 @@
 
 脚本入口：`Assets/Scripts/`（Network / Auth / Services / AppFlow / UI / Bootstrap / DI）
 
-### Phase 1 – 联机基础（3~5 周）
+### Phase 1 – 联机基础（3~5 周）✅
 - [x] Steamworks 接入（Lobby / 邀请 / P2P）
 - [x] LiteNetLib 客户端（Host / Join / 官服连接）
 - [x] 重连功能和引导
-- [x] 基础 StateSync 与玩家移动预测（靠LES默认机制支持）
+- [x] 基础 StateSync 与玩家移动预测（靠 LES 默认机制支持）
 
-### Phase 2 – 战斗核心（4~6 周）
-- [ ] Boss / 普通怪基础表现
-- [ ] 玩家预测 / 回滚实现
+### Phase 2 – 战斗核心（进行中，基础闭环已通）
+已落地（本地 / Host 权威可玩）：
+- [x] 角色控制（键鼠 + 手柄、WorldMotor 撞墙/贴地/跳跃、相机平滑）
+- [x] 2 个技能（近战 + 火球 Projectile）
+- [x] 打怪死亡（MonsterDeathService）
+- [x] 关卡障碍（LogicCollider / SpatialHash / WorldMotor）
+- [x] 怪物寻路 + 避障（FlowField + MonsterBotController 仇恨/Chase/Idle）
+- [x] 击退（MonsterKnockbackService）
+
+仍待完善：
+- [ ] 玩家完整预测 / 回滚（移动 + 技能释放 + 受击）
 - [ ] AOI 分层接收与远景群演
-- [ ] 技能系统 + 客户端表现
+- [ ] Boss / 普通怪完整 AI 与表现（服务器权威）
+- [ ] 技能系统表驱动 + 完整客户端表现（冷却/动画/特效）
 - [ ] 单机剧情模式可通关（进度上报服务器）
+- [ ] 基础 HUD / 战斗 UI（血条、技能栏、伤害数字）
 
 ### Phase 3 – 内容与打磨（持续）
 - [ ] 秘境 / Build / UI / 成就
