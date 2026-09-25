@@ -65,6 +65,7 @@ namespace GameAct.Auth
         {
             var json = JsonUtility.ToJson(body);
             var url = _config.MpBaseUrl + "/api/v1/auth/login";
+            Debug.Log($"[Auth] POST {url} provider={body.provider}");
 
             try
             {
@@ -80,6 +81,7 @@ namespace GameAct.Auth
             }
             catch (Exception e)
             {
+                Debug.LogError($"[Auth] POST {url} failed: {e.Message}");
                 var msg = e.Message;
                 if (string.IsNullOrEmpty(msg))
                     msg = e.GetType().Name;

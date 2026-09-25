@@ -252,6 +252,21 @@ namespace GameAct.Spatial
             return new Vector3(f.x, 0f, f.y);
         }
 
+        /// <summary>按格子索引读 Flow + Integration（调试箭头阵列用）。</summary>
+        public bool TryGetCell(int cx, int cz, out Vector2 flowXZ, out float integration, out bool blocked)
+        {
+            flowXZ = Vector2.zero;
+            integration = Unreachable;
+            blocked = true;
+            if (!_hasField || cx < 0 || cx >= _width || cz < 0 || cz >= _height)
+                return false;
+            int i = Index(cx, cz);
+            blocked = _cost[i] >= BlockCost;
+            integration = _integration[i];
+            flowXZ = _flow[i];
+            return true;
+        }
+
         /// <summary>
         /// 到目标的 integration 代价（越大越远，Unreachable 不可达）。
         /// </summary>

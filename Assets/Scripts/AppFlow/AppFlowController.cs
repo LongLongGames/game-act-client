@@ -525,19 +525,26 @@ namespace GameAct.AppFlow
         {
             _login.SetInteractable(false);
             _login.SetStatus("开发登录中…");
+
+            var mp = _config?.MpBaseUrl ?? "(null)";
+            Debug.Log($"[AppFlow] DevLogin start user={username} MpBaseUrl={mp} url={mp}/api/v1/auth/login");
+
             try
             {
                 var (ok, err) = await _auth.LoginAsync(username, password);
+                Debug.LogError($"[AppFlow] DevLogin FAIL: {err}");
                 if (!ok)
                 {
                     _login.SetStatus(err);
                     _login.SetInteractable(true);
                     return;
                 }
+                Debug.Log("[AppFlow] DevLogin OK → Home");
                 await GotoAsync(AppState.Home);
             }
             catch (Exception e)
             {
+                Debug.LogError($"[AppFlow] DevLogin exception: {e}");
                 _login.SetStatus(e.Message);
                 _login.SetInteractable(true);
             }

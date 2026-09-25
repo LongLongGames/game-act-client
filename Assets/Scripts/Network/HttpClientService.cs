@@ -84,7 +84,13 @@ namespace GameAct.Network
             }
 
             if (req.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogError(
+                    $"[Http] fail url={req.url} result={req.result} " +
+                    $"code={req.responseCode} error={req.error} " +
+                    $"body={req.downloadHandler?.text}");
                 throw new Exception($"{req.responseCode} {req.error}\n{req.downloadHandler?.text}");
+            }
 
             return req.downloadHandler.text;
         }

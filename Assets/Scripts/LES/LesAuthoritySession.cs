@@ -58,6 +58,10 @@ namespace GameAct.Les
             if (_localPlayer != null)
                 FlowFieldService.Tick(_localPlayer.Position, 0f);
 
+            // 调试：1Hz 流场箭头阵列（F3 开关）
+            if (UnityEngine.Object.FindObjectOfType<FlowFieldArrowVisualizer>() == null)
+                FlowFieldArrowVisualizer.Create(null, hz: 1f);
+
             MonsterDeathService.AuthorityDestroyMonster = DestroyMonsterById;
             MonsterKnockbackService.AuthorityKnockback = KnockbackMonsterById;
             _started = true;

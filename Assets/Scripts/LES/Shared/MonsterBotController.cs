@@ -14,9 +14,9 @@ namespace GameAct.Les.Shared
     public class MonsterBotController : AiControllerLogic<ActMonster>
     {
         /// <summary>进入仇恨的半径（米）</summary>
-        public static float AggroRange = 8f;
+        public static float AggroRange = 10f;
         /// <summary>脱战半径（米），应大于 AggroRange</summary>
-        public static float LoseAggroRange = 16f;
+        public static float LoseAggroRange = 15f;
         /// <summary>认为“贴身”可攻击的距离</summary>
         public static float MeleeRange = 1.6f;
         /// <summary>游荡转向间隔</summary>
