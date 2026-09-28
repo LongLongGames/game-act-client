@@ -2,48 +2,47 @@
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
+using System.IO;
 
 public static class CreateCompleteLocoController
 {
     [MenuItem("Tools/Create Complete Loco Controller (P2)")]
     public static void Create()
     {
-        string path = EditorUtility.SaveFilePanelInProject(
-            "Save Complete Loco Controller",
-            "PlayerLoco_P2",
-            "controller",
-            "选择保存位置");
+        // 1. 确保目录存在
+        string dir = "Assets/Art/AnimatorControllers";
+        if (!AssetDatabase.IsValidFolder(dir))
+        {
+            Directory.CreateDirectory(dir);          // 物理创建
+            AssetDatabase.Refresh();                 // 让 Unity 认这个文件夹
+        }
 
-        if (string.IsNullOrEmpty(path))
-            return;
+        string path = dir + "/PlayerLoco_P2.controller";
 
+        // 2. 已存在就删掉重建（避免半成品）
+        if (File.Exists(path))
+            AssetDatabase.DeleteAsset(path);
+
+        // 3. 创建 Controller
         var controller = AnimatorController.CreateAnimatorControllerAtPath(path);
 
-        // ========== 参数 ==========
-        controller.AddParameter("Movement", AnimatorControllerParameterType.Float);   // 0=Idle, 1=Walk, 2=Run
+        // ========== 参数（只留移动相关） ==========
+        controller.AddParameter("Movement", AnimatorControllerParameterType.Float);
         controller.AddParameter("IsGrounded", AnimatorControllerParameterType.Bool);
         controller.AddParameter("IsBoosting", AnimatorControllerParameterType.Bool);
+        controller.AddParameter("IsJumping", AnimatorControllerParameterType.Bool);
 
-        // ========== Base Layer ==========
         var root = controller.layers[0].stateMachine;
 
-        // 1. Locomotion (Blend Tree)
-        var locoState = root.AddState("Locomotion", new Vector3(300, 100, 0));
-        var blendTree = new BlendTree
-        {
-            name = "LocomotionBlend",
-            blendType = BlendTreeType.Simple1D,
-            blendParameter = "Movement",
-            useAutomaticThresholds = false
-        };
-        blendTree.AddChild(null, 0f); // Idle
-        blendTree.AddChild(null, 1f); // Walk
-        blendTree.AddChild(null, 2f); // Run
-        locoState.motion = blendTree;
-        AssetDatabase.AddObjectToAsset(blendTree, controller);
+        // ========== 状态 ==========
+        var locoState = root.AddState("Locomotion", new Vector3(300, 0, 0));
+        locoState.motion = CreateLocomotionBlendTree(controller);
+        root.defaultState = locoState;
+
+        var jumpState = root.AddState("Jump", new Vector3(300, 120, 0));
 
         // 2. BoostFlight
-        var boostState = root.AddState("BoostFlight", new Vector3(300, 250, 0));
+        var boostState = root.AddState("BoostFlight", new Vector3(300, 240, 0));
 
         // 3. Attack（主动攻击，代码强制播放）
         var attackState = root.AddState("Attack", new Vector3(550, 100, 0));
@@ -54,36 +53,58 @@ public static class CreateCompleteLocoController
         // 5. Death
         var deathState = root.AddState("Death", new Vector3(550, 300, 0));
 
-        // 默认状态
-        root.defaultState = locoState;
+        // ========== 过渡 ==========
+        // Locomotion → Jump
+        var t1 = locoState.AddTransition(jumpState);
+        t1.AddCondition(AnimatorConditionMode.If, 0, "IsJumping");
+        t1.AddCondition(AnimatorConditionMode.IfNot, 0, "IsGrounded");
+        t1.hasExitTime = false;
+        t1.duration = 0.05f;
+        t1.canTransitionToSelf = false;
 
-        // ========== 只保留移动 ↔ 飞行 的 Transition ==========
-        var toBoost = locoState.AddTransition(boostState);
-        toBoost.AddCondition(AnimatorConditionMode.If, 0, "IsBoosting");
-        toBoost.hasExitTime = false;
-        toBoost.duration = 0.1f;
+        // Jump → Locomotion
+        var t2 = jumpState.AddTransition(locoState);
+        t2.AddCondition(AnimatorConditionMode.If, 0, "IsGrounded");
+        t2.hasExitTime = false;
+        t2.duration = 0.08f;
 
-        var toLoco = boostState.AddTransition(locoState);
-        toLoco.AddCondition(AnimatorConditionMode.IfNot, 0, "IsBoosting");
-        toLoco.hasExitTime = false;
-        toLoco.duration = 0.15f;
+        // Locomotion → BoostFlight
+        var t3 = locoState.AddTransition(boostState);
+        t3.AddCondition(AnimatorConditionMode.If, 0, "IsBoosting");
+        t3.hasExitTime = false;
+        t3.duration = 0.1f;
 
-        // Attack / Hit / Death 全部不连线，只靠代码 Play
+        // BoostFlight → Locomotion
+        var t4 = boostState.AddTransition(locoState);
+        t4.AddCondition(AnimatorConditionMode.IfNot, 0, "IsBoosting");
+        t4.hasExitTime = false;
+        t4.duration = 0.1f;
 
-        EditorUtility.SetDirty(controller);
+        // Jump → BoostFlight（可选）
+        var t5 = jumpState.AddTransition(boostState);
+        t5.AddCondition(AnimatorConditionMode.If, 0, "IsBoosting");
+        t5.hasExitTime = false;
+        t5.duration = 0.08f;
+
         AssetDatabase.SaveAssets();
-        AssetDatabase.Refresh();
-
+        EditorUtility.FocusProjectWindow();
         Selection.activeObject = controller;
-        EditorGUIUtility.PingObject(controller);
 
-        Debug.Log("已生成完整 P2 Controller：\n" +
-                  "- Locomotion (Blend Tree)\n" +
-                  "- BoostFlight\n" +
-                  "- Attack（代码强制播放）\n" +
-                  "- Hit（受击）\n" +
-                  "- Death\n" +
-                  "请手动把对应 AnimationClip 拖进去。");
+        Debug.Log($"[CreateLocoController] 已生成：{path}");
+    }
+
+    static BlendTree CreateLocomotionBlendTree(AnimatorController controller)
+    {
+        var tree = new BlendTree
+        {
+            name = "LocomotionBlend",
+            blendType = BlendTreeType.Simple1D,
+            blendParameter = "Movement",
+            useAutomaticThresholds = true
+        };
+
+        AssetDatabase.AddObjectToAsset(tree, controller);
+        return tree;
     }
 }
 #endif

@@ -991,7 +991,6 @@ MonoBehaviour:
   CanBeKnockedBack: 1
   KnockbackResistance: 1
   Weight: 1
-  KnockbackDuration: 0.3
 --- !u!1 &2369779142621926756
 GameObject:
   m_ObjectHideFlags: 0
@@ -1736,7 +1735,7 @@ Animator:
   m_GameObject: {fileID: 6850193722978287132}
   m_Enabled: 1
   m_Avatar: {fileID: 9000000, guid: 69efb44cad697db4db3106b4e775deb0, type: 3}
-  m_Controller: {fileID: 9100000, guid: 02cfead407489bf4e810b92d6e983eea, type: 2}
+  m_Controller: {fileID: 9100000, guid: 37e3e876f08cab447bc3a5f6fe676e3d, type: 2}
   m_CullingMode: 1
   m_UpdateMode: 0
   m_ApplyRootMotion: 0
