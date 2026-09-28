@@ -4,8 +4,8 @@ namespace GameAct.Spatial
 {
     /// <summary>
     /// 极简场景阻挡：只挡「墙」，不挡「可走坡」。
-    /// 水平：胸口高度 SphereCast，仅当法线偏竖（墙）才截断位移；不做多段滑墙（避免来回弹）。
-    /// 竖直：一次向下 Raycast 贴地。
+    /// 水平：胸口高度 SphereCast，仅当法线偏竖（墙）才截断位移。
+    /// 竖直：向下 Raycast 贴地；下落时只做近地吸附，不整段传送。
     /// </summary>
     public static class WorldMotor
     {
@@ -21,6 +21,12 @@ namespace GameAct.Spatial
 
         /// <summary>胸口探测高度（相对脚底），避开脚扫到坡面。</summary>
         public static float ChestHeight = 0.95f;
+
+        /// <summary>
+        /// 距地面超过此值时，下落中不 Snap，交给重力慢慢掉。
+        /// 小于此值才吸附，避免穿地 / 落地弹。
+        /// </summary>
+        public static float FallSnapDistance = 0.35f;
 
         public static int EnvironmentMask { get; set; } = Physics.DefaultRaycastLayers;
 
@@ -53,13 +59,6 @@ namespace GameAct.Spatial
             return MoveHorizontalAndSnap(position, horizontalDelta, ref velY, ref grounded, radius, height, layerMask);
         }
 
-        /// <summary>
-        /// 只挡墙 + 贴墙滑动。
-        /// 1) 起点后退 Back，避免"已经贴墙 = 初始重叠"时 SphereCast 返回 distance=0、normal=-dir 的假法线。
-        /// 2) 撞墙后把剩余位移投影到墙切面继续走（最多 MaxIter 次），不再整段丢弃。
-        /// 3) 与墙的夹角是"平行/背离"时直接放行。
-        /// 4) 若已嵌入 Skin 内，只轻推出 ≤Skin，不会像深度穿透修正那样弹。
-        /// </summary>
         public static Vector3 BlockWallsOnly(Vector3 position, Vector3 delta, float radius, int layerMask)
         {
             delta.y = 0f;
@@ -85,7 +84,6 @@ namespace GameAct.Spatial
                     break;
                 }
 
-                // 取法线：初始重叠时 hit.normal 不可信，用最近点重算
                 Vector3 n = hit.normal;
                 if (hit.distance <= 0f && hit.collider != null)
                 {
@@ -93,7 +91,6 @@ namespace GameAct.Spatial
                     if (d.sqrMagnitude > 1e-8f) n = d.normalized;
                 }
 
-                // 地面/缓坡：放行，高度交给 Snap
                 if (n.y >= MinGroundNormalY)
                 {
                     position += delta;
@@ -104,35 +101,29 @@ namespace GameAct.Spatial
                 if (n.sqrMagnitude < 1e-6f) break;
                 n.Normalize();
 
-                // 平行或背离墙：不算阻挡
                 if (Vector3.Dot(dir, n) >= -0.001f)
                 {
                     position += delta;
                     break;
                 }
 
-                // 走到接触点前
-                float gap = hit.distance - Back;                 // 球面到墙面的空隙(相对 Skin 的余量另算)
+                float gap = hit.distance - Back;
                 float travel = Mathf.Max(0f, gap - Skin);
                 position += dir * travel;
 
-                // 已嵌入 Skin 内：轻推出，最多 Skin
                 float embed = Skin - gap;
                 if (embed > 0f)
                     position += n * Mathf.Min(embed, Skin);
 
-                // 剩余位移投影到墙切面 → 滑动
                 Vector3 remain = dir * (dist - travel);
                 delta = remain - n * Vector3.Dot(remain, n);
 
-                // 夹角/拐角保护：滑动方向与最初意图相反就停（避免来回抖）
                 if (Vector3.Dot(delta, firstDir) <= 0f) break;
             }
 
             return position;
         }
 
-        // 兼容旧名
         public static Vector3 SlideMove(Vector3 position, Vector3 delta, float radius, float height, int layerMask)
             => BlockWallsOnly(position, delta, radius, layerMask);
 
@@ -153,7 +144,7 @@ namespace GameAct.Spatial
                 return position;
             }
 
-            // 打到墙侧面：不乱吸
+            // 打到墙侧面：不吸，保持离地
             if (hit.normal.y < MinGroundNormalY * 0.5f)
             {
                 grounded = false;
@@ -161,6 +152,7 @@ namespace GameAct.Spatial
             }
 
             float footY = hit.point.y + GroundOffset;
+            float dy = footY - position.y;
 
             // 上升中且明显离地：不 Snap（跳跃）
             if (velY > 0.5f && position.y > footY + 0.2f)
@@ -169,8 +161,7 @@ namespace GameAct.Spatial
                 return position;
             }
 
-            // 抑制贴地抖动：误差很小就不改 Y
-            float dy = footY - position.y;
+            // 已贴地：微小误差忽略
             if (Mathf.Abs(dy) < 0.001f)
             {
                 grounded = true;
@@ -178,11 +169,34 @@ namespace GameAct.Spatial
                 return position;
             }
 
-            // 上坡：允许一帧抬高/下降；限制单帧最大变化，减少镜头抖
-            const float maxStep = 0.55f;
-            if (dy > maxStep) dy = maxStep;
-            if (dy < -maxStep) dy = -maxStep;
+            // ── 下落 / 离地：只做近地吸附，禁止大段传送 ──
+            // dy < 0 → 脚在地面上方，需要往下靠
+            if (dy < 0f)
+            {
+                float gap = -dy; // 离地高度
 
+                // 离地超过 FallSnapDistance：纯重力下落，本帧不改 Y
+                if (!grounded && gap > FallSnapDistance)
+                {
+                    grounded = false;
+                    return position;
+                }
+
+                // 近地（或上一帧还在地上走坡）：小步贴地，防止穿地
+                const float maxDownWalk = 0.55f;   // 走坡/上台阶反向的下降
+                const float maxDownLand = 0.4f;    // 落地吸附上限（略大于 FallSnapDistance）
+                float maxDown = grounded ? maxDownWalk : maxDownLand;
+                if (dy < -maxDown) dy = -maxDown;
+
+                position.y += dy;
+                grounded = true;
+                if (velY < 0f) velY = 0f;
+                return position;
+            }
+
+            // ── 需要抬升（上坡）──
+            const float maxUp = 0.55f;
+            if (dy > maxUp) dy = maxUp;
             position.y += dy;
             grounded = true;
             if (velY < 0f) velY = 0f;
