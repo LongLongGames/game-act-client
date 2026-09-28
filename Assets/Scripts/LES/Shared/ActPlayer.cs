@@ -38,6 +38,9 @@ namespace GameAct.Les.Shared
         bool _driveLocally;
         ActPlayerInput _cmd;
 
+        /// <summary>本 tick 是否刚起跳（表现层可消费一次）。</summary>
+        bool _jumpedThisTick;
+
         /// <summary>最近一个 tick 采样到的视线 Yaw（来自 LocalLookInput，不单独同步）。相机不要用它，相机每帧读 LocalLookInput。</summary>
         float _lookYaw;
 
@@ -58,6 +61,18 @@ namespace GameAct.Les.Shared
         public bool RenderNeedsSmoothing => !EntityManager.IsClient;
         public Vector3 Velocity => _velocity;
         public bool DriveLocally => _driveLocally;
+        /// <summary>是否贴地（供表现层驱动 IsGrounded）。</summary>
+        public bool Grounded => _grounded;
+
+        /// <summary>
+        /// 消费本 tick 的起跳标记。返回 true 表示刚起跳，表现层应播一次 Jump。
+        /// </summary>
+        public bool ConsumeJumpedThisTick()
+        {
+            if (!_jumpedThisTick) return false;
+            _jumpedThisTick = false;
+            return true;
+        }
 
         public Vector3 InterpolatedPosition =>
             EntityManager.IsClient ? _position.InterpolatedValue : _position.Value;
@@ -75,6 +90,7 @@ namespace GameAct.Les.Shared
             _velocity = Vector3.zero;
             _grounded = true;
             _faceHoldLeft = 0f;
+            _jumpedThisTick = false;
         }
 
         public void SetDriveLocally(bool on) => _driveLocally = on;
@@ -143,6 +159,7 @@ namespace GameAct.Les.Shared
             {
                 _velocity.y = JumpSpeed;
                 _grounded = false;
+                _jumpedThisTick = true;
             }
 
             _velocity.y += Gravity * dt;
@@ -181,46 +198,6 @@ namespace GameAct.Les.Shared
                 return ActPlayerInput.FromAxes(0f, 0f, LocalLookInput.Yaw, false, false);
 
             return ActPlayerInput.FromAxes(x, y, LocalLookInput.Yaw, sprint, jump);
-
-            /* ---- 旧硬编码（已由 GameInput + LocalLookInput 替代）----
-            var kb = Keyboard.current;
-            float x = 0f, y = 0f;
-            bool sprint = false;
-            if (kb != null)
-            {
-                if (kb.aKey.isPressed || kb.leftArrowKey.isPressed) x -= 1f;
-                if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) x += 1f;
-                if (kb.sKey.isPressed || kb.downArrowKey.isPressed) y -= 1f;
-                if (kb.wKey.isPressed || kb.upArrowKey.isPressed) y += 1f;
-                sprint = kb.leftShiftKey.isPressed;
-            }
-            var pad = Gamepad.current;
-            if (pad != null)
-            {
-                var stick = pad.leftStick.ReadValue();
-                if (stick.sqrMagnitude > 0.01f) { x = stick.x; y = stick.y; }
-                if (pad.leftShoulder.isPressed || pad.leftStickButton.isPressed) sprint = true;
-            }
-            if (!LocalLookInput.CursorLocked) { x = 0f; y = 0f; sprint = false; }
-            bool jump = LocalLookInput.ConsumeJump();
-            return ActPlayerInput.FromAxes(x, y, LocalLookInput.Yaw, sprint, jump);
-            ---- */
         }
-
-        /* ---- 旧仅向下 Raycast 贴地（无水平挡墙，侧面可穿进斜坡）----
-        static Vector3 Snap(Vector3 pos, ref Vector3 vel, ref bool grounded)
-        {
-            var origin = pos + Vector3.up * 2f;
-            if (Physics.Raycast(origin, Vector3.down, out var hit, 4f, ~0, QueryTriggerInteraction.Ignore))
-            {
-                grounded = true;
-                if (vel.y < 0f) vel.y = -2f;
-                return hit.point + Vector3.up * 0.02f;
-            }
-            grounded = false;
-            return pos;
-        }
-        ---- */
-
     }
 }

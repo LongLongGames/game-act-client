@@ -460,14 +460,12 @@ ModelImporter:
     motionNodeName: root
     animationImportErrors: 
     animationImportWarnings: "\nClip 'Scene' has import animation warnings that might
-      lower retargeting quality:\nNote: Activate translation DOF on avatar to improve
-      retargeting quality.\n\t'spine_02' has translation animation that will be discarded.\n\t'spine_03'
-      has translation animation that will be discarded.\n\t'neck_02' is inbetween
-      humanoid transforms and has rotation animation that will be discarded.\n\t'thigh_l'
-      has scale animation that will be discarded.\n\t'calf_l' has scale animation
-      that will be discarded.\n\t'foot_l' has scale animation that will be discarded.\n\t'thigh_r'
-      has scale animation that will be discarded.\n\t'calf_r' has scale animation
-      that will be discarded.\n\t'foot_r' has scale animation that will be discarded.\n"
+      lower retargeting quality:\n\t'neck_02' is inbetween humanoid transforms and
+      has rotation animation that will be discarded.\n\t'thigh_l' has scale animation
+      that will be discarded.\n\t'calf_l' has scale animation that will be discarded.\n\t'foot_l'
+      has scale animation that will be discarded.\n\t'thigh_r' has scale animation
+      that will be discarded.\n\t'calf_r' has scale animation that will be discarded.\n\t'foot_r'
+      has scale animation that will be discarded.\n"
     animationRetargetingWarnings: 
     animationDoRetargetingWarnings: 0
     importAnimatedCustomProperties: 0
@@ -504,35 +502,7 @@ ModelImporter:
       mirror: 0
       bodyMask: 01000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000
       curves: []
-      events:
-      - time: 0.24501425
-        functionName: Attack_CanComboOn
-        data: 
-        objectReferenceParameter: {instanceID: 0}
-        floatParameter: 0
-        intParameter: 0
-        messageOptions: 0
-      - time: 0.3846154
-        functionName: Attack_CanComboOff
-        data: 
-        objectReferenceParameter: {instanceID: 0}
-        floatParameter: 0
-        intParameter: 0
-        messageOptions: 0
-      - time: 0.16524217
-        functionName: Attack_HitboxOn
-        data: 
-        objectReferenceParameter: {instanceID: 0}
-        floatParameter: 0
-        intParameter: 0
-        messageOptions: 0
-      - time: 0.27635327
-        functionName: Attack_HitboxOff
-        data: 
-        objectReferenceParameter: {instanceID: 0}
-        floatParameter: 0
-        intParameter: 0
-        messageOptions: 0
+      events: []
       transformMask: []
       maskType: 3
       maskSource: {instanceID: 0}

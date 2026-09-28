@@ -203,7 +203,10 @@ namespace GameAct.Gameplay
 
                 var v = _lesLocalPlayer.Velocity;
                 float speedXZ = new Vector2(v.x, v.z).magnitude;
-                _localView.ApplyPose(pos, bodyYaw, speedXZ);
+                bool grounded = _lesLocalPlayer.Grounded;
+                if (_lesLocalPlayer.ConsumeJumpedThisTick())
+                    _localView.TriggerJump();
+                _localView.ApplyPose(pos, bodyYaw, speedXZ, grounded, v.y);
 
                 if (_camera != null)
                 {
