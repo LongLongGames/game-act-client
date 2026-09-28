@@ -8,6 +8,7 @@ using GameAct.Steam;
 using GameAct.Net;
 using GameAct.Les;
 using GameAct.Network;
+using GameAct.Audio;
 
 namespace GameAct.Bootstrap
 {
@@ -75,6 +76,9 @@ namespace GameAct.Bootstrap
             runners.AddComponent<SteamRunner>().Bind(steam);
             runners.AddComponent<NetRunner>().Bind(net);
 
+            // 音频管理（DontDestroyOnLoad，BGM/SFX 分轨）
+            var audio = AudioManager.Ensure();
+
             // 断线确认框（DontDestroyOnLoad，全屏模态）
             var dialogGo = new GameObject("ConfirmDialog");
             DontDestroyOnLoad(dialogGo);
@@ -83,7 +87,7 @@ namespace GameAct.Bootstrap
             var flow = new AppFlowController(
                 version, auth, player, http,
                 login, mainMenu, lobby, room, settings,
-                loading, hud, steam, net, config, dialog);
+                loading, hud, steam, net, config, dialog, audio);
             flow.StartAsync().Forget();
         }
 

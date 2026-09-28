@@ -11,6 +11,7 @@ using GameAct.Steam;
 using GameAct.Net;
 using GameAct.Gameplay;
 using GameAct.Les;
+using GameAct.Audio;
 
 namespace GameAct.AppFlow
 {
@@ -38,6 +39,7 @@ namespace GameAct.AppFlow
         readonly INetSession _net;
         readonly ApiConfig _config;
         readonly IConfirmDialog _dialog;
+        readonly IAudioManager _audio;
 
         bool _unauthorizedHandling;
         bool _handlingDisconnect;
@@ -69,7 +71,8 @@ namespace GameAct.AppFlow
             ISteamService steam = null,
             INetSession net = null,
             ApiConfig config = null,
-            IConfirmDialog dialog = null)
+            IConfirmDialog dialog = null,
+            IAudioManager audio = null)
         {
             _version = version;
             _auth = auth;
@@ -86,6 +89,7 @@ namespace GameAct.AppFlow
             _net = net;
             _config = config ?? new ApiConfig();
             _dialog = dialog;
+            _audio = audio ?? AudioManager.Instance;
         }
 
         public async UniTask StartAsync(CancellationToken ct = default)
@@ -133,6 +137,7 @@ namespace GameAct.AppFlow
             _settings.OnVSyncIndexChanged += HandleVSync;
             _settings.OnBgmVolumeChanged += v => { _bgmVolume = v; ApplyAudio(); };
             _settings.OnSfxVolumeChanged += v => { _sfxVolume = v; ApplyAudio(); };
+            // AudioManager 已在 Bootstrap 中 Ensure，此处仅同步音量
 
             if (_steam != null)
             {
@@ -838,7 +843,18 @@ namespace GameAct.AppFlow
 
         void ApplyAudio()
         {
-            AudioListener.volume = Mathf.Clamp01((_bgmVolume + _sfxVolume) * 0.005f);
+            // 分轨音量交给 AudioManager；不再用全局 AudioListener 混在一起
+            if (_audio != null)
+            {
+                _audio.BgmVolume = Mathf.Clamp01(_bgmVolume / 100f);
+                _audio.SfxVolume = Mathf.Clamp01(_sfxVolume / 100f);
+                _audio.SavePrefs();
+            }
+            else
+            {
+                // 兜底：无 AudioManager 时保持旧行为
+                AudioListener.volume = Mathf.Clamp01((_bgmVolume + _sfxVolume) * 0.005f);
+            }
         }
 
         void LoadSettingsPrefs()
@@ -850,6 +866,8 @@ namespace GameAct.AppFlow
             _vsyncIndex = PlayerPrefs.GetInt("set_vsync", QualitySettings.vSyncCount > 0 ? 1 : 0);
             ApplyAntiAliasing();
             ApplyVSync();
+            if (_audio != null)
+                _audio.LoadPrefs();
             ApplyAudio();
         }
 
@@ -860,6 +878,8 @@ namespace GameAct.AppFlow
             PlayerPrefs.SetInt("set_res", _resolutionIndex);
             PlayerPrefs.SetInt("set_aa", _aaIndex);
             PlayerPrefs.SetInt("set_vsync", _vsyncIndex);
+            if (_audio != null)
+                _audio.SavePrefs();
             PlayerPrefs.Save();
         }
 
