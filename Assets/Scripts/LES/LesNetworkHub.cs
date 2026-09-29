@@ -736,27 +736,38 @@ namespace GameAct.Les
                     : SceneManager.GetActiveScene().name;
                 EnsurePlayerViewRoot(level);
             }
+            else
+            {
+                // Map1 稍后才加载时，根节点补一次搬迁（失败不抛）
+                TryMoveToLevel(_playerViewRoot.gameObject, _levelScene ?? "Map1");
+            }
 
-            var alive = new HashSet<ushort>();
+            var alive = new HashSet<int>();
             foreach (var pl in em.GetEntities<ActPlayer>())
             {
                 if (pl == null || pl.IsDestroyed) continue;
                 // 本机控制的交给 GameplayRunner（Player_Local）
                 if (pl.DriveLocally || pl.IsLocalControlled) continue;
 
-                alive.Add(pl.Id);
-                var view = FindPlayerView(pl.Id);
+                int id = pl.Id;
+                alive.Add(id);
+                var view = FindPlayerView(id);
                 Vector3 pos = pl.InterpolatedPosition;
                 float yaw = pl.InterpolatedYaw;
+
                 if (view == null)
                 {
                     if (_playerViewRoot == null)
                         EnsurePlayerViewRoot(_levelScene ?? "Map1");
-                    view = PlayerView.Create((int)pl.Id, isLocal: false, pos, _playerViewRoot);
-                    MoveToLevel(view.gameObject, _levelScene ?? "Map1");
+
+                    // 先入表再摆场景，避免 Move 抛异常导致下一帧重复 Create
+                    view = PlayerView.Create(id, isLocal: false, pos, _playerViewRoot);
                     _playerViews.Add(view);
-                    Log($"Remote PlayerView created id={pl.Id}");
+                    Log($"Remote PlayerView created id={id}");
+                    // 子物体跟根节点同场景即可，不要对每个子物体 Move（会 ArgumentException 刷屏）
                 }
+
+                if (view == null) continue;
 
                 var v = pl.Velocity;
                 float speedXZ = new Vector2(v.x, v.z).magnitude;
@@ -766,7 +777,7 @@ namespace GameAct.Les
             for (int i = _playerViews.Count - 1; i >= 0; i--)
             {
                 var pv = _playerViews[i];
-                if (pv == null || !alive.Contains((ushort)pv.EntityId))
+                if (pv == null || !alive.Contains(pv.EntityId))
                 {
                     if (pv != null)
                         SafeDestroyGo(pv.gameObject);
@@ -779,15 +790,32 @@ namespace GameAct.Les
         {
             if (_playerViewRoot != null) return;
             var go = new GameObject("LES_PlayerViews");
+            UnityEngine.Object.DontDestroyOnLoad(go); // 避免跟 Boot/Map 加载来回搬导致异常
             _playerViewRoot = go.transform;
-            MoveToLevel(go, levelScene);
+            TryMoveToLevel(go, levelScene);
         }
 
         PlayerView FindPlayerView(int entityId)
         {
             for (int i = 0; i < _playerViews.Count; i++)
-                if (_playerViews[i] != null && _playerViews[i].EntityId == entityId)
-                    return _playerViews[i];
+            {
+                var pv = _playerViews[i];
+                if (pv != null && pv.EntityId == entityId)
+                    return pv;
+            }
+            // 列表丢了但场景里还在（异常中断过）：认领，禁止再 Create
+            if (_playerViewRoot != null)
+            {
+                for (int i = 0; i < _playerViewRoot.childCount; i++)
+                {
+                    var pv = _playerViewRoot.GetChild(i).GetComponent<PlayerView>();
+                    if (pv != null && pv.EntityId == entityId)
+                    {
+                        _playerViews.Add(pv);
+                        return pv;
+                    }
+                }
+            }
             return null;
         }
 
@@ -829,11 +857,29 @@ namespace GameAct.Les
 
         static void MoveToLevel(GameObject go, string sceneName)
         {
-            if (go == null || string.IsNullOrEmpty(sceneName)) return;
-            var scene = SceneManager.GetSceneByName(sceneName);
-            if (!scene.IsValid() || !scene.isLoaded) return;
-            if (go.scene == scene) return;
-            SceneManager.MoveGameObjectToScene(go, scene);
+            TryMoveToLevel(go, sceneName);
+        }
+
+        /// <summary>永不抛：场景未就绪 / DDOL / 父子跨场景时静默跳过。</summary>
+        static bool TryMoveToLevel(GameObject go, string sceneName)
+        {
+            if (go == null || string.IsNullOrEmpty(sceneName)) return false;
+            try
+            {
+                var scene = SceneManager.GetSceneByName(sceneName);
+                if (!scene.IsValid() || !scene.isLoaded) return false;
+                if (go.scene == scene) return true;
+                // 有父节点时先脱父，再搬（避免部分 Unity 版本 ArgumentException）
+                if (go.transform.parent != null)
+                    go.transform.SetParent(null, true);
+                SceneManager.MoveGameObjectToScene(go, scene);
+                return true;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[LES-Net] MoveToLevel skip: " + e.Message);
+                return false;
+            }
         }
 
         // ─── INetEventListener (UDP only) ────────────────────
