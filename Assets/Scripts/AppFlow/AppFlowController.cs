@@ -148,6 +148,7 @@ namespace GameAct.AppFlow
                 };
                 _steam.OnLobbyMembersChanged += RefreshWaitingMembers;
                 _steam.OnLobbyEntered += _ => RefreshWaitingMembers();
+                _steam.OnLobbyDataUpdated += HandleLobbyDataUpdated;
             }
 
             if (_net != null)
@@ -677,7 +678,7 @@ namespace GameAct.AppFlow
             RefreshWaitingMembers();
             _room.SetStatus(_isRoomHost
                 ? "你是房主 · 等待其他玩家（Steam Lobby）· 点开始再启 Host"
-                : "已加入 · 等待房主开始（客户端连接后续接入）");
+                : "已加入 · 等待房主开始");
         }
 
         void RefreshWaitingMembers()
@@ -881,6 +882,31 @@ namespace GameAct.AppFlow
             if (_audio != null)
                 _audio.SavePrefs();
             PlayerPrefs.Save();
+        }
+
+        // ─── 房主开局：Lobby 端点写入后，客户端自动进局 ─────
+
+        /// <summary>
+        /// LobbyData 变化时：非房主若检测到 Host 端点已写入，则自动 StartGame(Client)。
+        /// Host 自己点开始时也会写端点，但此时 _isRoomHost / State 会拦住客户端逻辑。
+        /// </summary>
+        void HandleLobbyDataUpdated()
+        {
+            if (_isRoomHost) return;
+            if (_gameStarting) return;
+            if (State == AppState.Gameplay) return;
+            if (State != AppState.Home) return; // 房间等待也在 Home（ShowOnlyRoom）
+            if (_steam == null || _steam.CurrentLobbyId == 0) return;
+
+            // 端点已写入 = 房主已点开始
+            ulong lobbyId = _steam.CurrentLobbyId;
+            bool hasEndpoint = SteamLobbyEndpoint.PreferSteamP2P(lobbyId)
+                               || !string.IsNullOrWhiteSpace(SteamLobbyEndpoint.ReadHost(lobbyId));
+            if (!hasEndpoint) return;
+
+            Debug.Log("[AppFlow] LobbyData: Host endpoint detected → Client StartGame");
+            _room.SetStatus("房主已开始 · 正在进入游戏…");
+            StartGameAsync("Map1", SessionMode.Client).Forget();
         }
 
         // ─── 局内断线：确认框 → 回房间/大厅 ─────────────────

@@ -43,6 +43,8 @@ namespace GameAct.Steam
         event Action<ulong> OnLobbyEntered;
         event Action OnLobbyLeft;
         event Action OnLobbyMembersChanged;
+        /// <summary>当前 Lobby 的 LobbyData 发生变化（Host 写端点 / 开局标记等）。</summary>
+        event Action OnLobbyDataUpdated;
         event Action<string> OnSteamError;
     }
 }

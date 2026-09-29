@@ -26,12 +26,14 @@ namespace GameAct.Steam
         public event Action<ulong> OnLobbyEntered;
         public event Action OnLobbyLeft;
         public event Action OnLobbyMembersChanged;
+        public event Action OnLobbyDataUpdated;
         public event Action<string> OnSteamError;
 
         Callback<LobbyCreated_t> _cbLobbyCreated;
         Callback<LobbyEnter_t> _cbLobbyEnter;
         Callback<GameLobbyJoinRequested_t> _cbJoinRequested;
         Callback<LobbyChatUpdate_t> _cbChatUpdate;
+        Callback<LobbyDataUpdate_t> _cbLobbyDataUpdate;
         CallResult<LobbyMatchList_t> _crLobbyList;
 
         UniTaskCompletionSource<ulong> _createTcs;
@@ -74,6 +76,7 @@ namespace GameAct.Steam
                 _cbLobbyEnter = Callback<LobbyEnter_t>.Create(OnLobbyEnterCb);
                 _cbJoinRequested = Callback<GameLobbyJoinRequested_t>.Create(OnJoinRequestedCb);
                 _cbChatUpdate = Callback<LobbyChatUpdate_t>.Create(OnChatUpdateCb);
+                _cbLobbyDataUpdate = Callback<LobbyDataUpdate_t>.Create(OnLobbyDataUpdateCb);
                 _crLobbyList = CallResult<LobbyMatchList_t>.Create(OnLobbyMatchList);
 
                 Debug.Log($"[Steam] Init OK  id={SteamId} name={PersonaName}");
@@ -338,6 +341,14 @@ namespace GameAct.Steam
 
             Debug.Log($"[Steam] Lobby list count={items.Count}");
             _listTcs?.TrySetResult(items.ToArray());
+        }
+
+        void OnLobbyDataUpdateCb(LobbyDataUpdate_t ev)
+        {
+            if (ev.m_ulSteamIDLobby != CurrentLobbyId) return;
+            if (ev.m_bSuccess == 0) return;
+            Debug.Log($"[Steam] LobbyData updated lobby={CurrentLobbyId}");
+            OnLobbyDataUpdated?.Invoke();
         }
 
         void ReportError(string msg)
