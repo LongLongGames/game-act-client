@@ -15,6 +15,7 @@ using GameAct.Les.Transport;
 using GameAct.Les.View;
 using GameAct.Spatial;
 using GameAct.Net;
+using GameAct.Gameplay.Player;
 
 namespace GameAct.Les
 {
@@ -65,8 +66,11 @@ namespace GameAct.Les
         NetTransportKind _activeTransport = NetTransportKind.Udp;
 
         readonly List<MonsterView> _views = new List<MonsterView>(32);
+        readonly List<PlayerView> _playerViews = new List<PlayerView>(8);
         Transform _viewRoot;
+        Transform _playerViewRoot;
         string _levelScene;
+        bool _suppressDisconnectEvent;
         string _userName = "Player";
         bool _enemiesSpawned;
 
@@ -133,24 +137,45 @@ namespace GameAct.Les
 
         public void Disconnect()
         {
-            if (ServerEm != null)
-                MonsterDeathService.Clear();
-            ClearViews();
+            // 编辑器 Stop / Domain unload：避免回调与二次 Destroy 把 Editor 打崩
+            bool quitting = !Application.isPlaying;
+            _suppressDisconnectEvent = quitting;
+
+            try
+            {
+                if (ServerEm != null)
+                    MonsterDeathService.Clear();
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[LES-Net] MonsterDeathService.Clear: " + e.Message);
+            }
+
+            try { ClearViews(); }
+            catch (Exception e) { Debug.LogWarning("[LES-Net] ClearViews: " + e.Message); }
 
             if (_steam != null)
             {
-                _steam.OnPeerConnected -= OnSteamPeerConnected;
-                _steam.OnPeerDisconnected -= OnSteamPeerDisconnected;
-                _steam.OnDataReceived -= OnSteamDataReceived;
-                _steam.OnLog -= OnSteamLog;
-                _steam.Dispose();
+                try
+                {
+                    _steam.OnPeerConnected -= OnSteamPeerConnected;
+                    _steam.OnPeerDisconnected -= OnSteamPeerDisconnected;
+                    _steam.OnDataReceived -= OnSteamDataReceived;
+                    _steam.OnLog -= OnSteamLog;
+                    _steam.Dispose();
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[LES-Net] Steam dispose: " + e.Message);
+                }
                 _steam = null;
             }
             _steamServerPeer = null;
 
             if (_manager != null)
             {
-                _manager.Stop();
+                try { _manager.Stop(); }
+                catch (Exception e) { Debug.LogWarning("[LES-Net] NetManager.Stop: " + e.Message); }
                 _manager = null;
             }
             _serverPeer = null;
@@ -158,14 +183,19 @@ namespace GameAct.Les
             ClientEm = null;
             _packetProcessor = null;
             _enemiesSpawned = false;
-            FlowFieldService.Reset();
+            try { FlowFieldService.Reset(); } catch { /* ignore */ }
             _activeTransport = NetTransportKind.Udp;
 
             var was = IsConnected || Role != NetRole.None;
             IsConnected = false;
             Role = NetRole.None;
             StatusText = "Disconnected";
-            if (was) OnDisconnected?.Invoke();
+            if (was && !_suppressDisconnectEvent)
+            {
+                try { OnDisconnected?.Invoke(); }
+                catch (Exception e) { Debug.LogWarning("[LES-Net] OnDisconnected: " + e.Message); }
+            }
+            _suppressDisconnectEvent = false;
         }
 
         public void SendReliable(byte[] data)
@@ -215,6 +245,7 @@ namespace GameAct.Les
             ServerEm?.Update();
             ClientEm?.Update();
             SyncMonsterViews();
+            SyncPlayerViews();
         }
 
         public void Dispose() => Disconnect();
@@ -613,15 +644,47 @@ namespace GameAct.Les
 
         void ClearViews()
         {
-            for (int i = 0; i < _views.Count; i++)
-                if (_views[i] != null)
-                    UnityEngine.Object.Destroy(_views[i].gameObject);
+            SafeDestroyViews(_views);
             _views.Clear();
+            SafeDestroyPlayerViews();
             if (_viewRoot != null)
             {
-                UnityEngine.Object.Destroy(_viewRoot.gameObject);
+                SafeDestroyGo(_viewRoot.gameObject);
                 _viewRoot = null;
             }
+            if (_playerViewRoot != null)
+            {
+                SafeDestroyGo(_playerViewRoot.gameObject);
+                _playerViewRoot = null;
+            }
+        }
+
+        static void SafeDestroyGo(GameObject go)
+        {
+            if (go == null) return;
+            if (!Application.isPlaying)
+                UnityEngine.Object.DestroyImmediate(go);
+            else
+                UnityEngine.Object.Destroy(go);
+        }
+
+        static void SafeDestroyViews(List<MonsterView> list)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i] != null)
+                    SafeDestroyGo(list[i].gameObject);
+            }
+        }
+
+        void SafeDestroyPlayerViews()
+        {
+            for (int i = 0; i < _playerViews.Count; i++)
+            {
+                if (_playerViews[i] != null)
+                    SafeDestroyGo(_playerViews[i].gameObject);
+            }
+            _playerViews.Clear();
         }
 
         void SyncMonsterViews()
@@ -655,6 +718,77 @@ namespace GameAct.Les
                 if (_views[i] == null)
                     _views.RemoveAt(i);
             }
+        }
+
+        /// <summary>
+        /// 远程玩家表现：本地玩家由 GameplayRunner 建 Player_Local；
+        /// 这里只为「非本机控制」的 ActPlayer 建 Player_{id}。
+        /// </summary>
+        void SyncPlayerViews()
+        {
+            EntityManager em = (EntityManager)ServerEm ?? ClientEm;
+            if (em == null) return;
+
+            if (_playerViewRoot == null)
+            {
+                var level = !string.IsNullOrEmpty(_levelScene)
+                    ? _levelScene
+                    : SceneManager.GetActiveScene().name;
+                EnsurePlayerViewRoot(level);
+            }
+
+            var alive = new HashSet<ushort>();
+            foreach (var pl in em.GetEntities<ActPlayer>())
+            {
+                if (pl == null || pl.IsDestroyed) continue;
+                // 本机控制的交给 GameplayRunner（Player_Local）
+                if (pl.DriveLocally || pl.IsLocalControlled) continue;
+
+                alive.Add(pl.Id);
+                var view = FindPlayerView(pl.Id);
+                Vector3 pos = pl.InterpolatedPosition;
+                float yaw = pl.InterpolatedYaw;
+                if (view == null)
+                {
+                    if (_playerViewRoot == null)
+                        EnsurePlayerViewRoot(_levelScene ?? "Map1");
+                    view = PlayerView.Create((int)pl.Id, isLocal: false, pos, _playerViewRoot);
+                    MoveToLevel(view.gameObject, _levelScene ?? "Map1");
+                    _playerViews.Add(view);
+                    Log($"Remote PlayerView created id={pl.Id}");
+                }
+
+                var v = pl.Velocity;
+                float speedXZ = new Vector2(v.x, v.z).magnitude;
+                view.ApplyPose(pos, yaw, speedXZ, pl.Grounded, v.y);
+            }
+
+            for (int i = _playerViews.Count - 1; i >= 0; i--)
+            {
+                var pv = _playerViews[i];
+                if (pv == null || !alive.Contains((ushort)pv.EntityId))
+                {
+                    if (pv != null)
+                        SafeDestroyGo(pv.gameObject);
+                    _playerViews.RemoveAt(i);
+                }
+            }
+        }
+
+        void EnsurePlayerViewRoot(string levelScene)
+        {
+            if (_playerViewRoot != null) return;
+            var go = new GameObject("LES_PlayerViews");
+            _playerViewRoot = go.transform;
+            MoveToLevel(go, levelScene);
+        }
+
+        PlayerView FindPlayerView(int entityId)
+        {
+            for (int i = 0; i < _playerViews.Count; i++)
+                if (_playerViews[i] != null && _playerViews[i].EntityId == entityId)
+                    return _playerViews[i];
+            return null;
         }
 
         void DestroyMonsterById(int entityId)

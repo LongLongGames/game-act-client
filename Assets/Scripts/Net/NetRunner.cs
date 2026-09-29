@@ -32,7 +32,15 @@ namespace GameAct.Net
 
         void OnApplicationQuit()
         {
-            _session?.Disconnect();
+            try { _session?.Disconnect(); }
+            catch (System.Exception e) { UnityEngine.Debug.LogWarning("[NetRunner] quit Disconnect: " + e.Message); }
+        }
+
+        void OnDestroy()
+        {
+            if (!Application.isPlaying) return;
+            try { _session?.Disconnect(); }
+            catch (System.Exception e) { UnityEngine.Debug.LogWarning("[NetRunner] destroy Disconnect: " + e.Message); }
         }
     }
 }

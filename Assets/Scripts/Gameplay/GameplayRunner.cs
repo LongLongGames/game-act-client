@@ -268,6 +268,22 @@ namespace GameAct.Gameplay
             return new Vector3(pos.x, Mathf.Max(pos.y, 0.05f), pos.z);
         }
 
-        void OnDestroy() => StopSession();
+        void OnDestroy()
+        {
+            // 编辑器点 Stop 时 Domain 正在卸：只清引用，避免二次 Destroy / 回调链把 Editor 打崩
+            if (!Application.isPlaying)
+            {
+                _lesLocalPlayer = null;
+                _localView = null;
+                _camera = null;
+                _poseSmoother = null;
+                _combatDriver = null;
+                _lesSolo = null;
+                _net = null;
+                _started = false;
+                return;
+            }
+            StopSession();
+        }
     }
 }
