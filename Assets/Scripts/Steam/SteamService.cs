@@ -10,6 +10,7 @@ namespace GameAct.Steam
 {
     /// <summary>
     /// Steam Lobby = Steam 渠道的房间发现与组队。不写入 game-lobby。
+    /// 支持列表估算延迟：Host 写 ping_loc，浏览端 EstimatePingTimeFromLocalHost。
     /// </summary>
     public class SteamService : ISteamService, IDisposable
     {
@@ -42,6 +43,8 @@ namespace GameAct.Steam
 
         HAuthTicket _lastTicket = HAuthTicket.Invalid;
         string _pendingRoomName;
+
+        const string KeyPingLoc = "ping_loc";
 
         public bool Init()
         {
@@ -78,6 +81,10 @@ namespace GameAct.Steam
                 _cbChatUpdate = Callback<LobbyChatUpdate_t>.Create(OnChatUpdateCb);
                 _cbLobbyDataUpdate = Callback<LobbyDataUpdate_t>.Create(OnLobbyDataUpdateCb);
                 _crLobbyList = CallResult<LobbyMatchList_t>.Create(OnLobbyMatchList);
+
+                // 初始化中继网络，Ping Location 才有数据（通常要几秒）
+                try { SteamNetworkingUtils.InitRelayNetworkAccess(); }
+                catch (Exception e) { Debug.LogWarning("[Steam] InitRelayNetworkAccess: " + e.Message); }
 
                 Debug.Log($"[Steam] Init OK  id={SteamId} name={PersonaName}");
                 return true;
@@ -269,6 +276,8 @@ namespace GameAct.Steam
             SteamMatchmaking.SetLobbyData(cid, "game", "act");
             SteamMatchmaking.SetLobbyData(cid, "ver", Application.version);
             SteamMatchmaking.SetLobbyData(cid, "name", _pendingRoomName ?? "房间");
+            //WriteLocalPingLocation(cid);
+            WriteLocalPingLocationWhenReadyAsync(cid).Forget();
             CurrentLobbyName = _pendingRoomName ?? "房间";
 
             Debug.Log($"[Steam] Lobby created {id} name={CurrentLobbyName}");
@@ -290,6 +299,11 @@ namespace GameAct.Steam
             CurrentLobbyName = SteamMatchmaking.GetLobbyData(cid, "name");
             if (string.IsNullOrEmpty(CurrentLobbyName))
                 CurrentLobbyName = "房间";
+
+            // 房主进房后再写一次 ping_loc（创建时 location 可能还没就绪）
+            if (SteamMatchmaking.GetLobbyOwner(cid) == SteamUser.GetSteamID())
+                //WriteLocalPingLocation(cid);
+                WriteLocalPingLocationWhenReadyAsync(cid).Forget();
 
             Debug.Log($"[Steam] Entered lobby {CurrentLobbyId} members={LobbyMemberCount}");
             OnLobbyEntered?.Invoke(CurrentLobbyId);
@@ -329,15 +343,26 @@ namespace GameAct.Steam
                 int max = SteamMatchmaking.GetLobbyMemberLimit(lobby);
                 if (max <= 0) max = 4;
 
+                int ping = EstimatePingFromLobby(lobby);
+
                 items.Add(new RoomListItem
                 {
                     id = lobby.m_SteamID.ToString(),
                     title = name,
                     subtitle = "Steam P2P",
                     players = members,
-                    maxPlayers = max
+                    maxPlayers = max,
+                    pingMs = ping
                 });
             }
+
+            // 有 ping 的按延迟升序，未知排后
+            items.Sort((a, b) =>
+            {
+                int pa = a.pingMs < 0 ? int.MaxValue : a.pingMs;
+                int pb = b.pingMs < 0 ? int.MaxValue : b.pingMs;
+                return pa.CompareTo(pb);
+            });
 
             Debug.Log($"[Steam] Lobby list count={items.Count}");
             _listTcs?.TrySetResult(items.ToArray());
@@ -347,14 +372,106 @@ namespace GameAct.Steam
         {
             if (ev.m_ulSteamIDLobby != CurrentLobbyId) return;
             if (ev.m_bSuccess == 0) return;
-            Debug.Log($"[Steam] LobbyData updated lobby={CurrentLobbyId}");
             OnLobbyDataUpdated?.Invoke();
         }
 
         void ReportError(string msg)
         {
-            Debug.LogWarning("[Steam] " + msg);
+            Debug.LogError("[Steam] " + msg);
             OnSteamError?.Invoke(msg);
+        }
+
+        /// <summary>Host：把本地 Ping Location 写入 Lobby Data，供列表估算延迟。</summary>
+        void WriteLocalPingLocation(CSteamID lobby)
+        {
+            try
+            {
+                var loc = default(SteamNetworkPingLocation_t);
+                float age = SteamNetworkingUtils.GetLocalPingLocation(out loc);
+                if (age < 0f)
+                {
+                    Debug.LogWarning("[Steam] PingLocation 尚未就绪，跳过写入（启动后等几秒再建房会有数据）");
+                    return;
+                }
+
+                SteamNetworkingUtils.ConvertPingLocationToString(
+                    ref loc, out string s, Constants.k_cchMaxSteamNetworkingPingLocationString);
+                if (!string.IsNullOrEmpty(s))
+                {
+                    SteamMatchmaking.SetLobbyData(lobby, KeyPingLoc, s);
+                    Debug.Log($"[Steam] Wrote ping_loc age={age:F1}s len={s.Length}");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Steam] WriteLocalPingLocation: " + e.Message);
+            }
+        }
+        /// <summary>Host：等 PingLocation 就绪再写入；失败会短时重试。</summary>
+        async UniTask WriteLocalPingLocationWhenReadyAsync(CSteamID lobby, int maxRetries = 10, int intervalMs = 500)
+        {
+            for (int i = 0; i < maxRetries; i++)
+            {
+                try
+                {
+                    // 主动催一下测量
+                    SteamNetworkingUtils.CheckPingDataUpToDate(2f);
+
+                    var loc = default(SteamNetworkPingLocation_t);
+                    float age = SteamNetworkingUtils.GetLocalPingLocation(out loc);
+                    if (age < 0f)
+                    {
+                        Debug.Log($"[Steam] PingLocation 未就绪 retry={i + 1}/{maxRetries}");
+                        await UniTask.Delay(intervalMs);
+                        continue;
+                    }
+
+                    SteamNetworkingUtils.ConvertPingLocationToString(
+                        ref loc, out string s, Constants.k_cchMaxSteamNetworkingPingLocationString);
+                    if (string.IsNullOrEmpty(s))
+                    {
+                        await UniTask.Delay(intervalMs);
+                        continue;
+                    }
+
+                    SteamMatchmaking.SetLobbyData(lobby, KeyPingLoc, s);
+                    Debug.Log($"[Steam] Wrote ping_loc age={age:F1}s len={s.Length} retry={i}");
+                    return;
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[Steam] WriteLocalPingLocation: " + e.Message);
+                    await UniTask.Delay(intervalMs);
+                }
+            }
+            Debug.LogWarning("[Steam] WriteLocalPingLocation 最终失败（PingLocation 一直不可用）");
+        }
+
+        /// <summary>浏览端：读对方 ping_loc，用本地估算 RTT。失败返回 -1。</summary>
+        static int EstimatePingFromLobby(CSteamID lobby)
+        {
+            try
+            {
+                var s = SteamMatchmaking.GetLobbyData(lobby, KeyPingLoc);
+                Debug.Log($"[Steam] ping_loc raw len={(s == null ? 0 : s.Length)} lobby={lobby.m_SteamID}");
+                if (string.IsNullOrEmpty(s)) return -1;
+
+                var remote = default(SteamNetworkPingLocation_t);
+                if (!SteamNetworkingUtils.ParsePingLocationString(s, out remote))
+                {
+                    Debug.LogWarning("[Steam] ParsePingLocationString 失败");
+                    return -1;
+                }
+
+                int ms = SteamNetworkingUtils.EstimatePingTimeFromLocalHost(ref remote);
+                Debug.Log($"[Steam] EstimatePing={ms}");
+                return ms >= 0 ? ms : -1;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Steam] EstimatePingFromLobby: " + e.Message);
+                return -1;
+            }
         }
     }
 }

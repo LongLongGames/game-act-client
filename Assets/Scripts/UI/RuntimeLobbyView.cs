@@ -8,6 +8,7 @@ namespace GameAct.UI
     /// <summary>
     /// 多人大厅 / ServerList：返回、刷新、创建、房间列表。
     /// 已移除大厅「邀请」按钮（邀请仅在房间内）。
+    /// 列表副标题展示估算延迟（pingMs）。
     /// </summary>
     public class RuntimeLobbyView : MonoBehaviour, ILobbyView
     {
@@ -151,7 +152,7 @@ namespace GameAct.UI
 
             if (rooms == null || rooms.Length == 0)
             {
-                var empty = CreateRoomRow(_roomContent, null, "暂无房间", "点击【创建】开一局，或【刷新】拉取列表", false);
+                var empty = CreateRoomRow(_roomContent, null, "暂无房间", "点击【创建】开一局，或【刷新】拉取列表", false, -1);
                 _roomRows.Add(empty);
                 return;
             }
@@ -159,15 +160,19 @@ namespace GameAct.UI
             foreach (var room in rooms)
             {
                 if (room == null) continue;
-                var sub = string.IsNullOrEmpty(room.subtitle)
+
+                string pingText = room.pingMs >= 0 ? $"{room.pingMs}ms" : "--";
+                string baseSub = string.IsNullOrEmpty(room.subtitle)
                     ? $"{room.players}/{room.maxPlayers}"
                     : $"{room.subtitle}  ·  {room.players}/{room.maxPlayers}";
-                var row = CreateRoomRow(_roomContent, room.id, room.title ?? room.id, sub, true);
+                var sub = $"{baseSub}  ·  {pingText}";
+
+                var row = CreateRoomRow(_roomContent, room.id, room.title ?? room.id, sub, true, room.pingMs);
                 _roomRows.Add(row);
             }
         }
 
-        GameObject CreateRoomRow(Transform parent, string roomId, string title, string subtitle, bool joinable)
+        GameObject CreateRoomRow(Transform parent, string roomId, string title, string subtitle, bool joinable, int pingMs)
         {
             var go = new GameObject("Room_" + (roomId ?? "empty"));
             go.transform.SetParent(parent, false);
@@ -193,7 +198,16 @@ namespace GameAct.UI
 
             var subT = UiUtil.CreateLabel(go.transform, subtitle, 12, new Vector2(-80, -14));
             subT.alignment = TextAnchor.MiddleLeft;
-            subT.color = new Color(0.6f, 0.65f, 0.7f);
+            // 按延迟着色：绿 <80 / 黄 <150 / 红 / 灰未知
+            if (pingMs < 0)
+                subT.color = new Color(0.6f, 0.65f, 0.7f);
+            else if (pingMs < 80)
+                subT.color = new Color(0.35f, 0.85f, 0.45f);
+            else if (pingMs < 150)
+                subT.color = new Color(0.95f, 0.85f, 0.3f);
+            else
+                subT.color = new Color(0.95f, 0.4f, 0.35f);
+
             var sr = subT.GetComponent<RectTransform>();
             if (sr != null)
             {

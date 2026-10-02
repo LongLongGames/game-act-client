@@ -13,5 +13,7 @@ namespace GameAct.UI
         public string subtitle;
         public int players;
         public int maxPlayers;
+        /// <summary>估算 RTT（ms）。&lt;0 表示未知。</summary>
+        public int pingMs = -1;
     }
 }

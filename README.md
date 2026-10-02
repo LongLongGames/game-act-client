@@ -87,14 +87,16 @@
 - [x] 击退（MonsterKnockbackService）
 
 仍待完善：
+- [ ] Input分层：Gameplay、Menus、Dialogues
 - [ ] 玩家完整预测 / 回滚（移动 + 技能释放 + 受击）
 - [ ] AOI 分层接收与远景群演
 - [ ] Boss / 普通怪完整 AI 与表现（服务器权威）
+- [ ] Excel 技能表
 - [ ] 技能系统表驱动 + 完整客户端表现（冷却/动画/特效）
-- [ ] 单机剧情模式可通关（进度上报服务器）
 - [ ] 基础 HUD / 战斗 UI（血条、技能栏、伤害数字）
 
 ### Phase 3 – 内容与打磨（持续）
+- [ ] 单机剧情模式可通关（进度上报服务器）
 - [ ] 秘境 / Build / UI / 成就
 - [ ] 性能优化（GPU Instancing、可选 DOTS）
 - [ ] 官方 ServerList 支持
