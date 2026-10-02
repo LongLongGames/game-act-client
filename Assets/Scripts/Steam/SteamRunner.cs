@@ -9,6 +9,7 @@ namespace GameAct.Steam
     public class SteamRunner : MonoBehaviour
     {
         ISteamService _steam;
+        bool _shuttingDown;
 
         [Inject]
         public void Construct(ISteamService steam)
@@ -23,12 +24,35 @@ namespace GameAct.Steam
 
         void Update()
         {
+            if (_shuttingDown) return;
             _steam?.RunCallbacks();
         }
 
         void OnApplicationQuit()
         {
-            _steam?.Shutdown();
+            // Editor Stop / 进程退出：SteamService.Shutdown 内部已对 Editor 跳过
+            // SteamAPI.Shutdown，并对坏 pipe 做防护。
+            SafeShutdown();
+        }
+
+        void OnDestroy()
+        {
+            // Domain reload / 销毁时再兜一次
+            SafeShutdown();
+        }
+
+        void SafeShutdown()
+        {
+            if (_shuttingDown) return;
+            _shuttingDown = true;
+            try
+            {
+                _steam?.Shutdown();
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[SteamRunner] Shutdown: " + e.Message);
+            }
         }
     }
 }

@@ -1,5 +1,7 @@
 using UnityEngine;
 using VContainer;
+using GameAct.Les;
+using GameAct.Les.Transport;
 
 namespace GameAct.Net
 {
@@ -11,6 +13,7 @@ namespace GameAct.Net
     public class NetRunner : MonoBehaviour
     {
         INetSession _session;
+        bool _quitting;
 
         [Inject]
         public void Construct(INetSession session)
@@ -25,6 +28,7 @@ namespace GameAct.Net
 
         void Update()
         {
+            if (_quitting) return;
             if (_session == null || _session.Role == NetRole.None)
                 return;
             _session.Poll();
@@ -32,15 +36,42 @@ namespace GameAct.Net
 
         void OnApplicationQuit()
         {
-            try { _session?.Disconnect(); }
-            catch (System.Exception e) { UnityEngine.Debug.LogWarning("[NetRunner] quit Disconnect: " + e.Message); }
+            _quitting = true;
+            SafeDisconnect(isQuit: true);
         }
 
         void OnDestroy()
         {
-            if (!Application.isPlaying) return;
-            try { _session?.Disconnect(); }
-            catch (System.Exception e) { UnityEngine.Debug.LogWarning("[NetRunner] destroy Disconnect: " + e.Message); }
+            if (!Application.isPlaying)
+            {
+                // Domain unload：只软清，不碰可能已坏的 Steam Native
+                _quitting = true;
+                SafeDisconnect(isQuit: true);
+                return;
+            }
+            if (_quitting) return;
+            SafeDisconnect(isQuit: false);
+        }
+
+        void SafeDisconnect(bool isQuit)
+        {
+            if (_session == null) return;
+            try
+            {
+                if (isQuit && _session is LesNetworkHub hub)
+                {
+                    // 退出时走 Soft：不 CloseConnection / 不 DestroyPollGroup
+                    hub.DisconnectSoft();
+                }
+                else
+                {
+                    _session.Disconnect();
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[NetRunner] Disconnect: " + e.Message);
+            }
         }
     }
 }

@@ -135,10 +135,18 @@ namespace GameAct.Les
             return await ConnectUdpAsync(address, port);
         }
 
-        public void Disconnect()
+        public void Disconnect() => DisconnectInternal(softSteam: false);
+
+        /// <summary>
+        /// Editor Stop / 进程退出用：托管状态全清，Steam P2P 只 SoftDispose（不调 CloseConnection）。
+        /// 避免 Invalid pipe handle → Native Access Violation 闪退。
+        /// </summary>
+        public void DisconnectSoft() => DisconnectInternal(softSteam: true);
+
+        void DisconnectInternal(bool softSteam)
         {
             // 编辑器 Stop / Domain unload：避免回调与二次 Destroy 把 Editor 打崩
-            bool quitting = !Application.isPlaying;
+            bool quitting = softSteam || !Application.isPlaying;
             _suppressDisconnectEvent = quitting;
 
             try
@@ -162,7 +170,10 @@ namespace GameAct.Les
                     _steam.OnPeerDisconnected -= OnSteamPeerDisconnected;
                     _steam.OnDataReceived -= OnSteamDataReceived;
                     _steam.OnLog -= OnSteamLog;
-                    _steam.Dispose();
+                    if (softSteam || !Application.isPlaying)
+                        _steam.SoftDispose();
+                    else
+                        _steam.Dispose();
                 }
                 catch (Exception e)
                 {
@@ -221,6 +232,9 @@ namespace GameAct.Les
 
         public void Poll()
         {
+            if (!Application.isPlaying) return;
+            if (Role == NetRole.None && !IsConnected) return;
+
             if (_activeTransport == NetTransportKind.SteamP2P)
                 _steam?.Poll();
             else

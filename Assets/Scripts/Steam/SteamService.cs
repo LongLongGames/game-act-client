@@ -101,26 +101,84 @@ namespace GameAct.Steam
         public void RunCallbacks()
         {
             if (!IsInitialized) return;
-            try { SteamAPI.RunCallbacks(); }
-            catch (Exception e) { Debug.LogWarning("[Steam] RunCallbacks: " + e.Message); }
+            // 退出 / Domain unload 中再跑回调会踩坏掉的 IPC pipe
+            if (!Application.isPlaying) return;
+            try
+            {
+                if (!SteamAPI.IsSteamRunning()) return;
+                SteamAPI.RunCallbacks();
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[Steam] RunCallbacks: " + e.Message);
+            }
         }
 
+        /// <summary>
+        /// 安全关闭 Steam。
+        /// Editor 点 Stop / 非正常断网后，Steam 底层 pipe 可能已 Invalid；
+        /// 再调 LeaveLobby / SteamAPI.Shutdown 会触发 Native Access Violation，整进程闪退。
+        /// </summary>
         public void Shutdown()
         {
             if (!IsInitialized) return;
-            LeaveLobby();
+
+            // 先把托管状态清掉，避免其它脚本继续以为还活着
+            bool steamAlive = false;
+            try { steamAlive = SteamAPI.IsSteamRunning(); }
+            catch { steamAlive = false; }
+
+            // LeaveLobby 只在 Steam 仍健康时做
+            if (steamAlive && Application.isPlaying)
+            {
+                try { LeaveLobby(); }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[Steam] LeaveLobby on Shutdown: {e.Message}");
+                }
+            }
+            else
+            {
+                // 只清本地状态，不碰 Native
+                CurrentLobbyId = 0;
+                CurrentLobbyName = "";
+            }
+
             try
             {
-                if (_lastTicket != HAuthTicket.Invalid)
+                if (steamAlive && _lastTicket != HAuthTicket.Invalid)
                 {
                     SteamUser.CancelAuthTicket(_lastTicket);
                     _lastTicket = HAuthTicket.Invalid;
                 }
-                SteamAPI.Shutdown();
             }
             catch { /* ignore */ }
+            _lastTicket = HAuthTicket.Invalid;
+
+            // Editor 退出 Play 时禁止 SteamAPI.Shutdown：
+            // Steamworks.NET 官方也建议 Editor 下不要硬 Shutdown，否则易和共享 Steam 客户端死锁。
+            // Standalone 正常退出仍 Shutdown，但 pipe 已坏则跳过。
+#if UNITY_EDITOR
+            Debug.Log("[Steam] Shutdown (Editor：跳过 SteamAPI.Shutdown，仅清托管状态)");
+#else
+            if (steamAlive)
+            {
+                try { SteamAPI.Shutdown(); }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[Steam] SteamAPI.Shutdown 异常（已忽略）: {e.Message}");
+                }
+            }
+            else
+            {
+                Debug.LogWarning("[Steam] Steam 未运行或 pipe 已坏，跳过 SteamAPI.Shutdown");
+            }
+#endif
+
             IsInitialized = false;
             IsAvailable = false;
+            CurrentLobbyId = 0;
+            CurrentLobbyName = "";
             Debug.Log("[Steam] Shutdown");
         }
 
@@ -160,11 +218,31 @@ namespace GameAct.Steam
         public void LeaveLobby()
         {
             if (CurrentLobbyId == 0) return;
-            SteamMatchmaking.LeaveLobby(new CSteamID(CurrentLobbyId));
+
+            ulong id = CurrentLobbyId;
+            // 先清本地，避免回调重入
             CurrentLobbyId = 0;
             CurrentLobbyName = "";
-            OnLobbyLeft?.Invoke();
-            Debug.Log("[Steam] LeaveLobby");
+
+            try
+            {
+                if (!IsInitialized || !SteamAPI.IsSteamRunning())
+                {
+                    Debug.LogWarning("[Steam] LeaveLobby 跳过 Native（Steam 未就绪）");
+                }
+                else
+                {
+                    SteamMatchmaking.LeaveLobby(new CSteamID(id));
+                    Debug.Log("[Steam] LeaveLobby");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[Steam] LeaveLobby Native 异常（已忽略）: {e.Message}");
+            }
+
+            try { OnLobbyLeft?.Invoke(); }
+            catch (Exception e) { Debug.LogWarning("[Steam] OnLobbyLeft: " + e.Message); }
         }
 
         public async UniTask<RoomListItem[]> RequestLobbyListAsync()

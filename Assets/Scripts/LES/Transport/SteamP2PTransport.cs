@@ -131,6 +131,7 @@ namespace GameAct.Les.Transport
 
         public void Poll()
         {
+            if (_disposed || !Application.isPlaying) return;
             if (_disposed) return;
             // 状态回调由 SteamAPI.RunCallbacks（SteamRunner）驱动；
             // 这里只收消息。
@@ -166,13 +167,17 @@ namespace GameAct.Les.Transport
         public void DisconnectPeer(HSteamNetConnection conn)
         {
             if (conn == HSteamNetConnection.Invalid) return;
-            SteamNetworkingSockets.CloseConnection(conn, 0, "disconnect", false);
+            if (CanTouchNative())
+            {
+                try { SteamNetworkingSockets.CloseConnection(conn, 0, "disconnect", false); }
+                catch { /* ignore */ }
+            }
             RemovePeer(conn, "local_close");
         }
 
         public void Shutdown()
         {
-            ShutdownInternal();
+            ShutdownInternal(nativeSafe: CanTouchNative());
             StatusText = "Disconnected";
         }
 
@@ -180,48 +185,69 @@ namespace GameAct.Les.Transport
         {
             if (_disposed) return;
             _disposed = true;
-            ShutdownInternal();
+            ShutdownInternal(nativeSafe: CanTouchNative());
+        }
+
+        /// <summary>
+        /// 仅清托管状态，绝不调用 CloseConnection / DestroyPollGroup。
+        /// 用于 Editor Stop / Steam pipe 已坏的场景，防止 Native Access Violation。
+        /// </summary>
+        public void SoftDispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            ShutdownInternal(nativeSafe: false);
         }
 
         // ─── internal ───────────────────────────────────────
 
-        void ShutdownInternal()
+        static bool CanTouchNative()
+        {
+            // Domain unload / 非 Play：Unity 正在拆进程，Steam IPC 往往已坏
+            if (!Application.isPlaying) return false;
+            try { return SteamAPI.IsSteamRunning(); }
+            catch { return false; }
+        }
+
+        void ShutdownInternal(bool nativeSafe = true)
         {
             foreach (var kv in _peers)
             {
-                try
+                try { kv.Value.MarkClosed(); } catch { /* ignore */ }
+                if (nativeSafe)
                 {
-                    kv.Value.MarkClosed();
-                    SteamNetworkingSockets.CloseConnection(kv.Key, 0, "shutdown", false);
+                    try { SteamNetworkingSockets.CloseConnection(kv.Key, 0, "shutdown", false); }
+                    catch { /* ignore */ }
                 }
-                catch { /* ignore */ }
             }
             _peers.Clear();
 
             if (_listenSocket != HSteamListenSocket.Invalid)
             {
-                try { SteamNetworkingSockets.CloseListenSocket(_listenSocket); }
-                catch { /* ignore */ }
+                if (nativeSafe)
+                {
+                    try { SteamNetworkingSockets.CloseListenSocket(_listenSocket); }
+                    catch { /* ignore */ }
+                }
                 _listenSocket = HSteamListenSocket.Invalid;
             }
 
-            if (_clientConn != HSteamNetConnection.Invalid)
-            {
-                // 已在 peers 关闭；清引用
-                _clientConn = HSteamNetConnection.Invalid;
-            }
+            _clientConn = HSteamNetConnection.Invalid;
 
-            CleanupHandles();
+            CleanupHandles(nativeSafe);
             IsListening = false;
             IsConnected = false;
         }
 
-        void CleanupHandles()
+        void CleanupHandles(bool nativeSafe = true)
         {
             if (_pollGroup != HSteamNetPollGroup.Invalid)
             {
-                try { SteamNetworkingSockets.DestroyPollGroup(_pollGroup); }
-                catch { /* ignore */ }
+                if (nativeSafe)
+                {
+                    try { SteamNetworkingSockets.DestroyPollGroup(_pollGroup); }
+                    catch { /* ignore */ }
+                }
                 _pollGroup = HSteamNetPollGroup.Invalid;
             }
 
