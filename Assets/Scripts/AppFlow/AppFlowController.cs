@@ -46,6 +46,7 @@ namespace GameAct.AppFlow
         bool _isRoomHost;
         bool _gameStarting;
         string _pendingLevelName = "Map1";
+        SessionMode _pendingSessionMode = SessionMode.Solo;
 
         float _bgmVolume = 80f;
         float _sfxVolume = 100f;
@@ -235,6 +236,7 @@ namespace GameAct.AppFlow
             if (_gameStarting) return;
             _gameStarting = true;
             _pendingLevelName = sceneName;
+            _pendingSessionMode = mode;
             bool fromRoom = mode == SessionMode.Host || mode == SessionMode.Client;
 
             try
@@ -278,6 +280,10 @@ namespace GameAct.AppFlow
 
                 Debug.Log($"[AppFlow] Gameplay ready: scene={sceneName} mode={mode} " +
                           $"netRole={_net?.Role} connected={_net?.IsConnected}");
+
+                // ESC 暂停菜单（安全退出入口，避免直接点 Editor Stop）
+                try { GameAct.Input.GameInput.EnableMenu(); } catch { /* ignore */ }
+                GameAct.Gameplay.GameplayPauseMenu.Ensure(this);
             }
             catch (Exception e)
             {
@@ -293,6 +299,7 @@ namespace GameAct.AppFlow
                     _net?.Disconnect();
 
                 StopExistingGameplay();
+                EnableBootCameraAndListener();
 
                 if (fromRoom && _steam != null && _steam.CurrentLobbyId != 0)
                 {
@@ -405,6 +412,49 @@ namespace GameAct.AppFlow
             {
                 if (al != null && al.gameObject.scene.name == "Boot")
                     al.enabled = false;
+            }
+        }
+
+        /// <summary>
+        /// 离开关卡回 UI 时恢复 Boot 场景相机 / AudioListener（进局时被 DisableBoot 关掉）。
+        /// 否则 Map1 卸掉后主相机消失，UICamera 仍是 disabled，界面黑屏。
+        /// </summary>
+        void EnableBootCameraAndListener()
+        {
+            // 先清掉局内残留的 ThirdPersonCamera / 非 Boot 主相机，避免多相机抢 Main
+            try
+            {
+                var tpcs = UnityEngine.Object.FindObjectsByType<GameAct.Gameplay.Camera.ThirdPersonCamera>(
+                    FindObjectsInactive.Include, FindObjectsSortMode.None);
+                foreach (var tpc in tpcs)
+                {
+                    if (tpc == null) continue;
+                    // 只销毁挂在非 Boot 场景、或运行时临时创建的相机
+                    var sceneName = tpc.gameObject.scene.name;
+                    if (sceneName != "Boot")
+                        UnityEngine.Object.Destroy(tpc.gameObject);
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[AppFlow] cleanup ThirdPersonCamera: " + e.Message);
+            }
+
+            var cams = UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var cam in cams)
+            {
+                if (cam == null) continue;
+                if (cam.gameObject.scene.name == "Boot")
+                    cam.enabled = true;
+            }
+
+            var listeners = UnityEngine.Object.FindObjectsByType<AudioListener>(
+                FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var al in listeners)
+            {
+                if (al == null) continue;
+                if (al.gameObject.scene.name == "Boot")
+                    al.enabled = true;
             }
         }
 
@@ -909,6 +959,108 @@ namespace GameAct.AppFlow
             StartGameAsync("Map1", SessionMode.Client).Forget();
         }
 
+
+        // ─── 局内 ESC 安全离开 / 退出 ───────────────────────
+
+        /// <summary>
+        /// 局内主动离开：停玩法、断网、卸关卡。
+        /// 仍在 Steam Lobby 则回房间，否则回大厅。不杀进程。
+        /// </summary>
+        public async UniTask RequestLeaveGameplayAsync()
+        {
+            if (State != AppState.Gameplay) return;
+
+            Debug.Log("[AppFlow] RequestLeaveGameplay (ESC menu)");
+
+            // 销毁暂停菜单 UI
+            var pause = UnityEngine.Object.FindFirstObjectByType<GameAct.Gameplay.GameplayPauseMenu>();
+            if (pause != null)
+                pause.Dispose();
+
+            StopExistingGameplay();
+            try { _net?.Disconnect(); } catch (Exception e) { Debug.LogWarning("[AppFlow] leave Disconnect: " + e.Message); }
+
+            var level = string.IsNullOrEmpty(_pendingLevelName) ? "Map1" : _pendingLevelName;
+            await UnloadLevelIfLoadedAsync(level);
+
+            // Map1 卸掉后必须把 Boot/UICamera 重新打开
+            EnableBootCameraAndListener();
+
+            _hud?.Hide();
+
+            // 按进局模式分流：单机回主菜单；联机有房间回房间；否则回多人大厅
+            var leftMode = _pendingSessionMode;
+            _pendingSessionMode = SessionMode.Solo;
+
+            if (leftMode == SessionMode.Solo)
+            {
+                _isRoomHost = false;
+                ShowOnlyMainMenu();
+                _mainMenu.SetStatus("已退出单机对局");
+                State = AppState.Home;
+            }
+            else
+            {
+                bool stillInLobby = _steam != null && _steam.CurrentLobbyId != 0;
+                if (stillInLobby)
+                {
+                    // 不 LeaveLobby：保留房间，方便再开
+                    ShowOnlyRoom();
+                    RefreshWaitingMembers();
+                    _room.SetStatus("已离开对局 · 可再次开始或退出房间");
+                    State = AppState.Home;
+                }
+                else
+                {
+                    _isRoomHost = false;
+                    ShowOnlyLobby();
+                    _lobby.SetStatus("已离开对局");
+                    HandleRefreshLobby().Forget();
+                    State = AppState.Home;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 局内安全退出应用。先做托管清理，再结束 Play / Quit。
+        /// </summary>
+        public async UniTask RequestQuitFromGameplayAsync()
+        {
+            Debug.Log("[AppFlow] RequestQuitFromGameplay (ESC menu)");
+
+            var pause = UnityEngine.Object.FindFirstObjectByType<GameAct.Gameplay.GameplayPauseMenu>();
+            if (pause != null)
+                pause.Dispose();
+
+            try
+            {
+                StopExistingGameplay();
+                _net?.Disconnect();
+                // 主动 LeaveLobby 再 Shutdown 由 SteamRunner.OnApplicationQuit 处理
+                if (_steam != null && _steam.CurrentLobbyId != 0)
+                    _steam.LeaveLobby();
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[AppFlow] quit cleanup: " + e.Message);
+            }
+
+            var level = string.IsNullOrEmpty(_pendingLevelName) ? "Map1" : _pendingLevelName;
+            await UnloadLevelIfLoadedAsync(level);
+
+            EnableBootCameraAndListener();
+
+            _isRoomHost = false;
+            try { _auth?.Logout(); } catch { /* ignore */ }
+
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+            Application.Quit();
+#endif
+            await UniTask.Yield();
+        }
+
         // ─── 局内断线：确认框 → 回房间/大厅 ─────────────────
 
         /// <summary>
@@ -935,6 +1087,8 @@ namespace GameAct.AppFlow
 
                 var level = string.IsNullOrEmpty(_pendingLevelName) ? "Map1" : _pendingLevelName;
                 await UnloadLevelIfLoadedAsync(level);
+
+                EnableBootCameraAndListener();
 
                 bool stillInLobby = _steam != null && _steam.CurrentLobbyId != 0;
 
