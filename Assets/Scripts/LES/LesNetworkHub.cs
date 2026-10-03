@@ -74,6 +74,11 @@ namespace GameAct.Les
         string _userName = "Player";
         bool _enemiesSpawned;
 
+        // 怪物 View 清理用（每帧复用，避免分配）
+        readonly HashSet<ushort> _aliveMonsterIds = new HashSet<ushort>();
+        // Host：远程玩家 peer → Pawn。退房（断线）时据此销毁角色，并防止重复 Join 刷出第二个角色。
+        readonly Dictionary<AbstractNetPeer, ActPlayer> _remotePawns = new Dictionary<AbstractNetPeer, ActPlayer>();
+
         // 可选延迟模拟（仅 UDP 生效；本机测预测用，默认关）
         public bool SimulateLatency { get; set; }
         public int SimulationMinLatencyMs { get; set; } = 50;
@@ -100,7 +105,9 @@ namespace GameAct.Les
                 (byte)LesTypesMapFactory.TickRate,
                 ServerSendRate.EqualToFPS);
             ClientEm = null;
+            MonsterDamageService.Clear(); // Host 本地结算，不是 Client 代理
             MonsterDeathService.AuthorityDestroyMonster = DestroyMonsterById;
+            MonsterKnockbackService.AuthorityKnockback = KnockbackMonsterById;
 
             if (transport == NetTransportKind.SteamP2P)
                 return await StartHostSteamAsync();
@@ -152,11 +159,15 @@ namespace GameAct.Les
             try
             {
                 if (ServerEm != null)
+                {
                     MonsterDeathService.Clear();
+                    MonsterKnockbackService.Clear();
+                }
+                MonsterDamageService.Clear();
             }
             catch (Exception e)
             {
-                Debug.LogWarning("[LES-Net] MonsterDeathService.Clear: " + e.Message);
+                Debug.LogWarning("[LES-Net] MonsterService.Clear: " + e.Message);
             }
 
             try { ClearViews(); }
@@ -194,6 +205,8 @@ namespace GameAct.Les
             ClientEm = null;
             _packetProcessor = null;
             _enemiesSpawned = false;
+            _remotePawns.Clear();
+            _aliveMonsterIds.Clear();
             try { FlowFieldService.Reset(); } catch { /* ignore */ }
             _activeTransport = NetTransportKind.Udp;
 
@@ -504,6 +517,7 @@ namespace GameAct.Les
                     peer,
                     LesTypesMapFactory.HeaderByte);
                 ServerEm = null;
+                InstallClientCombatBridge();
 
                 IsConnected = true;
                 StatusText = $"LES Client SteamP2P → {peer.RemoteSteamId.m_SteamID}";
@@ -523,11 +537,16 @@ namespace GameAct.Les
                 ClientEm = null;
                 _steamServerPeer = null;
                 Role = NetRole.None;
+                MonsterDamageService.Clear();
+                // Poll 在 Role=None 后不再跑，这里直接清掉所有远程表现，避免残留
+                try { ClearViews(); }
+                catch (Exception e) { Debug.LogWarning("[LES-Net] ClearViews: " + e.Message); }
                 OnDisconnected?.Invoke();
             }
             else if (Role == NetRole.Host && ServerEm != null)
             {
-                // LES 会在下次 Update 感知 peer 失效；此处仅日志
+                // 退房：销毁该玩家的角色 / 控制器 / 玩家槽，其余端的远程 PlayerView 随实体消失自动回收
+                RemoveRemotePlayer(peer, reason);
                 StatusText = $"LES Host SteamP2P peers={PeerCount}";
             }
         }
@@ -554,6 +573,13 @@ namespace GameAct.Les
                     // 简易 Join 解析（不依赖 LiteNet PacketProcessor）
                     if (Role == NetRole.Host)
                         TryHandleSteamJoin(peer, data);
+                    break;
+                }
+                case LesPacketType.MonsterDamage:
+                case LesPacketType.MonsterKnockback:
+                {
+                    if (Role == NetRole.Host)
+                        HandleClientCombatPacket(data);
                     break;
                 }
                 default:
@@ -617,6 +643,13 @@ namespace GameAct.Les
 
         void SpawnRemotePlayer(AbstractNetPeer abstractPeer, string userName)
         {
+            // 重复 Join（重发 / 重连抖动）：不再刷第二个角色
+            if (_remotePawns.ContainsKey(abstractPeer))
+            {
+                Log($"Duplicate Join ignored user={userName}");
+                return;
+            }
+
             var netPlayer = ServerEm.AddPlayer(abstractPeer);
             if (netPlayer == null)
             {
@@ -631,7 +664,53 @@ namespace GameAct.Les
                 e.SetDriveLocally(false);
             });
             ServerEm.AddController<ActPlayerController>(netPlayer, pawn);
+            _remotePawns[abstractPeer] = pawn;
             Log($"Spawned remote ActPlayer id={pawn.Id} for {userName}");
+        }
+
+        /// <summary>
+        /// Host：玩家退房 / 断线 → 销毁其 Pawn、控制器与玩家槽。
+        /// Pawn 在 ServerEm 销毁后会同步给所有 Client，各端 SyncPlayerViews 随之回收远程 PlayerView。
+        /// </summary>
+        void RemoveRemotePlayer(AbstractNetPeer peer, string reason)
+        {
+            if (peer == null) return;
+
+            _remotePawns.TryGetValue(peer, out var pawn);
+            _remotePawns.Remove(peer);
+
+            var em = ServerEm;
+            if (em == null) return;
+
+            // 1) Pawn（最关键，先做）
+            try
+            {
+                if (pawn != null && !pawn.IsDestroyed)
+                    pawn.Destroy();
+            }
+            catch (Exception e) { Debug.LogWarning("[LES-Net] destroy pawn: " + e.Message); }
+
+            // 2) 控制器：Pawn 已销毁/为空，或正是该 Pawn 的控制器
+            try
+            {
+                var stale = new List<ActPlayerController>(2);
+                foreach (var c in em.GetEntities<ActPlayerController>())
+                {
+                    if (c == null || c.IsDestroyed) continue;
+                    var p = c.Pawn;
+                    if (p == null || p.IsDestroyed || (pawn != null && p.Id == pawn.Id))
+                        stale.Add(c);
+                }
+                for (int i = 0; i < stale.Count; i++)
+                    stale[i].Destroy();
+            }
+            catch (Exception e) { Debug.LogWarning("[LES-Net] destroy controller: " + e.Message); }
+
+            // 3) 玩家槽
+            try { em.RemovePlayer(peer); }
+            catch (Exception e) { Debug.LogWarning("[LES-Net] RemovePlayer: " + e.Message); }
+
+            Log($"Remote player removed pawn={(pawn != null ? pawn.Id.ToString() : "?")} reason={reason}");
         }
 
         // ═══════════════════════════════════════════════════
@@ -711,6 +790,32 @@ namespace GameAct.Les
             else if (ClientEm != null && _viewRoot == null)
                 EnsureViewRoot(SceneManager.GetActiveScene().name);
 
+            // 1) 当前存活的怪物实体
+            _aliveMonsterIds.Clear();
+            foreach (var monster in em.GetEntities<ActMonster>())
+            {
+                if (monster == null || monster.IsDestroyed || monster.IsDead) continue;
+                _aliveMonsterIds.Add(monster.Id);
+            }
+
+            // 2) 清理：实体已消失（= 被 Host 销毁）的 View → 播死亡并回收。
+            //    先清理再建新 View：LES 实体 Id 可能被复用，不能让旧 View 占着 Id。
+            for (int i = _views.Count - 1; i >= 0; i--)
+            {
+                var v = _views[i];
+                if (v == null)
+                {
+                    _views.RemoveAt(i);
+                    continue;
+                }
+                if (_aliveMonsterIds.Contains(v.EntityId)) continue;
+
+                // Host 本地击杀的 View 已在 dying（幂等）；Client 靠这里同步销毁
+                v.BeginRemoteDeath();
+                _views.RemoveAt(i); // 由 View 自己延迟回收，不再占用 Id
+            }
+
+            // 3) 为存活怪物建 View / 应用位姿
             foreach (var monster in em.GetEntities<ActMonster>())
             {
                 if (monster == null || monster.IsDestroyed || monster.IsDead) continue;
@@ -724,13 +829,6 @@ namespace GameAct.Les
                     _views.Add(view);
                 }
                 view.Apply(monster.Position, monster.Yaw, monster.SpeedXZ);
-            }
-
-            // 清掉已销毁的 View 引用
-            for (int i = _views.Count - 1; i >= 0; i--)
-            {
-                if (_views[i] == null)
-                    _views.RemoveAt(i);
             }
         }
 
@@ -783,9 +881,10 @@ namespace GameAct.Les
 
                 if (view == null) continue;
 
-                var v = pl.Velocity;
-                float speedXZ = new Vector2(v.x, v.z).magnitude;
-                view.ApplyPose(pos, yaw, speedXZ, pl.Grounded, v.y);
+                // 远程 ActPlayer 在非权威端不跑 Update，_velocity/_grounded 是初值；
+                // 动画必须用权威端同步下来的 Anim* / Count，不能读 Velocity/Grounded。
+                view.SyncEvents(pl.JumpCount, pl.AttackCount);
+                view.ApplyPose(pos, yaw, pl.AnimSpeedXZ, pl.AnimGrounded, pl.AnimVelY);
             }
 
             for (int i = _playerViews.Count - 1; i >= 0; i--)
@@ -844,6 +943,121 @@ namespace GameAct.Les
                 monster.Destroy();
                 Debug.Log($"[LES-Net] ActMonster destroyed id={entityId}");
                 break;
+            }
+
+            // AI 控制器随怪物一起清掉（Pawn 已销毁/为空的残留）
+            try
+            {
+                List<MonsterBotController> stale = null;
+                foreach (var c in ServerEm.GetEntities<MonsterBotController>())
+                {
+                    if (c == null || c.IsDestroyed) continue;
+                    var p = c.Pawn;
+                    if (p == null || p.IsDestroyed)
+                    {
+                        if (stale == null) stale = new List<MonsterBotController>(2);
+                        stale.Add(c);
+                    }
+                }
+                if (stale != null)
+                    for (int i = 0; i < stale.Count; i++)
+                        stale[i].Destroy();
+            }
+            catch (Exception e) { Debug.LogWarning("[LES-Net] destroy bot controller: " + e.Message); }
+        }
+
+        /// <summary>权威击退（Host 本地命中 / Host 收到 Client 上报）。</summary>
+        void KnockbackMonsterById(int entityId, Vector3 worldDir, float distance)
+        {
+            if (ServerEm == null || distance <= 0.001f) return;
+            foreach (var monster in ServerEm.GetEntities<ActMonster>())
+            {
+                if (monster == null || monster.IsDestroyed || monster.IsDead) continue;
+                if (monster.Id != entityId) continue;
+                monster.ApplyKnockback(worldDir, distance);
+                break;
+            }
+        }
+
+        // ═══════════════════════════════════════════════════
+        // Client → Host 战斗上报（怪物 HP / 死亡 / 击退只由 Host 结算）
+        // ═══════════════════════════════════════════════════
+
+        void InstallClientCombatBridge()
+        {
+            MonsterDamageService.ClientDamageSender = SendMonsterDamageToHost;
+            MonsterDamageService.ClientKnockbackSender = SendMonsterKnockbackToHost;
+        }
+
+        void SendMonsterDamageToHost(int entityId, float damage)
+        {
+            // [type][id:u16][damage:f32]
+            var buf = new byte[1 + 2 + 4];
+            buf[0] = (byte)LesPacketType.MonsterDamage;
+            buf[1] = (byte)(entityId & 0xff);
+            buf[2] = (byte)((entityId >> 8) & 0xff);
+            Buffer.BlockCopy(BitConverter.GetBytes(damage), 0, buf, 3, 4);
+            SendToHost(buf);
+        }
+
+        void SendMonsterKnockbackToHost(int entityId, Vector3 worldDir, float distance)
+        {
+            // [type][id:u16][dirX:f32][dirZ:f32][dist:f32]
+            var buf = new byte[1 + 2 + 4 + 4 + 4];
+            buf[0] = (byte)LesPacketType.MonsterKnockback;
+            buf[1] = (byte)(entityId & 0xff);
+            buf[2] = (byte)((entityId >> 8) & 0xff);
+            Buffer.BlockCopy(BitConverter.GetBytes(worldDir.x), 0, buf, 3, 4);
+            Buffer.BlockCopy(BitConverter.GetBytes(worldDir.z), 0, buf, 7, 4);
+            Buffer.BlockCopy(BitConverter.GetBytes(distance), 0, buf, 11, 4);
+            SendToHost(buf);
+        }
+
+        /// <summary>Client → Host 可靠有序发送（UDP / Steam 通用）。</summary>
+        void SendToHost(byte[] data)
+        {
+            if (Role != NetRole.Client || data == null || data.Length == 0) return;
+
+            if (_activeTransport == NetTransportKind.SteamP2P)
+            {
+                _steamServerPeer?.SendReliableOrdered(data);
+                return;
+            }
+
+            if (_serverPeer == null) return;
+            var w = new NetDataWriter();
+            w.Put(data);
+            _serverPeer.Send(w, DeliveryMethod.ReliableOrdered);
+        }
+
+        /// <summary>Host：处理 Client 上报的怪物伤害 / 击退。数据来自网络，一律校验。</summary>
+        void HandleClientCombatPacket(byte[] d)
+        {
+            if (ServerEm == null || d == null || d.Length < 3) return;
+
+            var type = (LesPacketType)d[0];
+            int id = d[1] | (d[2] << 8);
+
+            if (type == LesPacketType.MonsterDamage)
+            {
+                if (d.Length < 7) return;
+                float dmg = BitConverter.ToSingle(d, 3);
+                if (float.IsNaN(dmg) || dmg <= 0f || dmg > 1000f) return;
+
+                if (CombatTargetRegistry.TryGetReceiver(id, out var recv) && !recv.IsDead)
+                    recv.ApplyDamage(dmg, "client"); // 死亡 → MonsterView.OnReceiverDied → DestroyMonsterById → 同步给所有端
+            }
+            else if (type == LesPacketType.MonsterKnockback)
+            {
+                if (d.Length < 15) return;
+                float dx = BitConverter.ToSingle(d, 3);
+                float dz = BitConverter.ToSingle(d, 7);
+                float dist = BitConverter.ToSingle(d, 11);
+                if (float.IsNaN(dx) || float.IsNaN(dz) || float.IsNaN(dist)) return;
+                if (dist <= 0.001f || dist > 10f) return;
+
+                // Client 侧已按 HitReceiver 抗性算好最终距离，这里直接走权威击退
+                MonsterKnockbackService.RequestKnockback(id, new Vector3(dx, 0f, dz), dist);
             }
         }
 
@@ -922,6 +1136,7 @@ namespace GameAct.Les
                     abstractPeer,
                     LesTypesMapFactory.HeaderByte);
                 ServerEm = null;
+                InstallClientCombatBridge();
 
                 IsConnected = true;
                 StatusText = $"LES Client connected → {peer.Address}";
@@ -950,10 +1165,17 @@ namespace GameAct.Les
                     _manager = null;
                 }
                 Role = NetRole.None;
+                MonsterDamageService.Clear();
+                // Poll 在 Role=None 后不再跑，这里直接清掉所有远程表现，避免残留
+                try { ClearViews(); }
+                catch (Exception e) { Debug.LogWarning("[LES-Net] ClearViews: " + e.Message); }
                 OnDisconnected?.Invoke();
             }
             else
             {
+                // 退房：销毁该玩家的角色 / 控制器 / 玩家槽，其余端的远程 PlayerView 随实体消失自动回收
+                if (Role == NetRole.Host && peer.Tag is AbstractNetPeer ap)
+                    RemoveRemotePlayer(ap, disconnectInfo.Reason.ToString());
                 StatusText = $"Host peers={_manager?.ConnectedPeersCount ?? 0}";
             }
         }
@@ -984,6 +1206,16 @@ namespace GameAct.Les
                     reader.GetByte();
                     if (Role == NetRole.Host)
                         _packetProcessor?.ReadAllPackets(reader, peer);
+                    break;
+                }
+                case LesPacketType.MonsterDamage:
+                case LesPacketType.MonsterKnockback:
+                {
+                    // 整包读出（含 type 字节）
+                    var data = new byte[reader.AvailableBytes];
+                    reader.GetBytes(data, data.Length);
+                    if (Role == NetRole.Host)
+                        HandleClientCombatPacket(data);
                     break;
                 }
                 default:

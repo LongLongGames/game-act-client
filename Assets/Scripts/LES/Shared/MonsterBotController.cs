@@ -46,6 +46,9 @@ namespace GameAct.Les.Shared
         Vector3 _sepSmoothed;
         Vector3 _lastDesired;
 
+        /// <summary>被控制的怪物（供 Hub 在怪物销毁后清理控制器）。</summary>
+        public ActMonster Pawn => ControlledEntity;
+
         public MonsterBotController(EntityParams entityParams) : base(entityParams)
         {
             _yaw = Random.Range(0f, 360f);

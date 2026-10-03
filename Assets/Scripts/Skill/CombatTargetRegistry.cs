@@ -48,7 +48,9 @@ namespace GameAct.Skill
         public static void Unregister(HitReceiver receiver)
         {
             if (receiver == null) return;
-            Unregister(receiver.EntityId);
+            // 只删「自己」：LES 实体 Id 可能被新怪复用，不能误删已注册的新目标
+            if (_map.TryGetValue(receiver.EntityId, out var e) && e.Receiver == receiver)
+                _map.Remove(receiver.EntityId);
         }
 
         public static bool TryGet(int entityId, out Entry entry) => _map.TryGetValue(entityId, out entry);

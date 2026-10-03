@@ -15,6 +15,15 @@ namespace GameAct.Les.Shared
     /// </summary>
     public class ActPlayerController : HumanControllerLogic<ActPlayerInput, ActPlayer>
     {
+        /// <summary>
+        /// 跳跃输入保持时间（秒）。
+        /// VisualUpdate 每渲染帧都会整条覆盖 PendingInput，而逻辑 tick 只有 30Hz：
+        /// 按键那一帧写进去的 Jump=true，下一渲染帧就被 false 覆盖，tick 采到的概率≈30/FPS。
+        /// 保持 ≥ 2 个 tick（0.067s）即可必达；ActPlayer 只在贴地时起跳，空中残留的 true 无副作用。
+        /// </summary>
+        const float JumpInputHold = 0.12f;
+        float _jumpHoldUntil;
+
         public ActPlayerController(EntityParams entityParams) : base(entityParams)
         {
             Cursor.lockState = CursorLockMode.Locked;
@@ -29,6 +38,7 @@ namespace GameAct.Les.Shared
             {
                 ref var idle = ref ModifyPendingInput();
                 idle = ActPlayerInput.FromAxes(0f, 0f, LocalLookInput.Yaw, false, false);
+                LocalActionInput.Stamp(ref idle);
                 return;
             }
 
@@ -44,10 +54,13 @@ namespace GameAct.Les.Shared
 
             bool sprint = GameInput.SprintHeld;
             // Jump：优先消费 LocalLookInput 锁存（抗 30Hz 漏帧），否则读 Action
-            bool jump = LocalLookInput.ConsumeJump() || GameInput.JumpPressed;
+            if (LocalLookInput.ConsumeJump() || GameInput.JumpPressed)
+                _jumpHoldUntil = Time.unscaledTime + JumpInputHold;
+            bool jump = Time.unscaledTime < _jumpHoldUntil;
 
             ref var pending = ref ModifyPendingInput();
             pending = ActPlayerInput.FromAxes(x, y, LocalLookInput.Yaw, sprint, jump);
+            LocalActionInput.Stamp(ref pending);
 
             /* ---- 旧硬编码（已由 GameInput + LocalLookInput 替代）----
             float _yaw = 0f;
@@ -85,6 +98,9 @@ namespace GameAct.Les.Shared
             pending = ActPlayerInput.FromAxes(x, y, _yaw, sprint, jump);
             ---- */
         }
+
+        /// <summary>被控制的 Pawn（供 Hub 在玩家退房时按 Pawn 找到并销毁控制器）。</summary>
+        public ActPlayer Pawn => ControlledEntity;
 
         protected override void BeforeControlledUpdate()
         {

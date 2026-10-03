@@ -79,6 +79,7 @@ namespace GameAct.Gameplay
 
             // 视角输入：每渲染帧累加，相机与逻辑采样共用同一份 yaw/pitch。
             LocalLookInput.Begin(yaw: 0f, pitch: 12f);
+            LocalActionInput.Begin();
             GameInput.EnablePlayer();
 
             _poseSmoother = new PoseSmoother(LesTypesMapFactory.TickRate);
@@ -165,6 +166,7 @@ namespace GameAct.Gameplay
             _poseSmoother = null;
             _poseInited = false;
             LocalLookInput.End();
+            LocalActionInput.End();
             GameInput.DisablePlayer();
             _net = null;
             _mode = SessionMode.Solo;

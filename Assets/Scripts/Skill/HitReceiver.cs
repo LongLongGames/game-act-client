@@ -109,15 +109,46 @@ namespace GameAct.Skill
         {
             if (IsDead) return;
 
-            CurrentHp -= skill.BaseDamage;
+            // 联机 Client：只做表现（闪色）+ 上报 Host；HP / 死亡以 Host 为准
+            if (MonsterDamageService.IsClientProxy)
+            {
+                _flashTimer = FlashDuration;
+                ApplyFlash(1f);
+                MonsterDamageService.ReportDamage(EntityId, skill.BaseDamage);
+                return;
+            }
+
+            ApplyDamage(skill.BaseDamage, skill.Name);
+        }
+
+        /// <summary>
+        /// 权威结算伤害（Solo / Host 本地命中，或 Host 收到 Client 上报）。
+        /// </summary>
+        public void ApplyDamage(float damage, string source = "net")
+        {
+            if (IsDead || damage <= 0f) return;
+
+            CurrentHp -= damage;
             Debug.Log($"[HitReceiver] Entity={EntityId} Name={gameObject.name} " +
-                      $"Dmg={skill.BaseDamage} Hp={CurrentHp:F0}/{MaxHp} Skill={skill.Name}");
+                      $"Dmg={damage} Hp={CurrentHp:F0}/{MaxHp} Src={source}");
 
             _flashTimer = FlashDuration;
             ApplyFlash(1f);
 
             if (CurrentHp <= 0f)
                 BeginDeath();
+        }
+
+        /// <summary>
+        /// 非权威端：LES 实体已被 Host 销毁 → 本地标记死亡（不触发 Died，不回请求销毁）。
+        /// </summary>
+        public void MarkDeadRemote()
+        {
+            if (IsDead) return;
+            IsDead = true;
+            CurrentHp = 0f;
+            ClearFlash();
+            CombatTargetRegistry.Unregister(this);
         }
 
         /// <summary>
@@ -153,6 +184,13 @@ namespace GameAct.Skill
             if (dir.sqrMagnitude < 1e-8f)
                 dir = transform.forward;
             dir.Normalize();
+
+            // 联机 Client：上报 Host，由 Host 改权威位置
+            if (MonsterDamageService.IsClientProxy)
+            {
+                MonsterDamageService.ReportKnockback(EntityId, dir, finalDist);
+                return;
+            }
 
             // 权威：改 ActMonster（Solo/Host 已注册回调）
             MonsterKnockbackService.RequestKnockback(EntityId, dir, finalDist);

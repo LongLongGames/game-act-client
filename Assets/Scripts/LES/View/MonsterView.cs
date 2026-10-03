@@ -25,6 +25,9 @@ namespace GameAct.Les.View
         HitReceiver _hitReceiver;
         bool _dying;
 
+        /// <summary>已进入死亡流程（本地判死 或 远端实体消失）。</summary>
+        public bool IsDying => _dying;
+
         static readonly int SpeedHash = Animator.StringToHash("Speed");
         static readonly int MovementHash = Animator.StringToHash("Movement");
         int _deathTriggerHash;
@@ -92,6 +95,31 @@ namespace GameAct.Les.View
             // 权威：停 AI + 销毁 ActMonster（同进程 Solo/Host）
             MonsterDeathService.RequestDestroy(EntityId);
 
+            PlayDeathVisual();
+            StartCoroutine(DespawnAfterDelay());
+        }
+
+        /// <summary>
+        /// 非权威端（联机 Client / Host 上已被销毁的残留 View）：
+        /// LES 实体已消失 = 被 Host 销毁 → 播死亡动画并回收，不再回请求权威销毁。幂等。
+        /// </summary>
+        public void BeginRemoteDeath()
+        {
+            if (_dying) return;
+            _dying = true;
+
+            if (_hitReceiver != null)
+                _hitReceiver.MarkDeadRemote();
+
+            PlayDeathVisual();
+            if (isActiveAndEnabled)
+                StartCoroutine(DespawnAfterDelay());
+            else
+                Destroy(gameObject);
+        }
+
+        void PlayDeathVisual()
+        {
             // 表现：死亡动画
             if (_anim != null && HasParam(_anim, _deathTriggerHash))
                 _anim.SetTrigger(_deathTriggerHash);
@@ -106,8 +134,6 @@ namespace GameAct.Les.View
                 if (HasParam(_anim, MovementHash))
                     _anim.SetFloat(MovementHash, 0f);
             }
-
-            StartCoroutine(DespawnAfterDelay());
         }
 
         IEnumerator DespawnAfterDelay()

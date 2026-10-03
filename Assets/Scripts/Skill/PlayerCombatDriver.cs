@@ -4,6 +4,7 @@ using GameAct.Spatial;
 using GameAct.Gameplay.Player;
 using GameAct.Les.Shared;
 using GameAct.Input;
+using GameAct.Gameplay.Camera;
 
 namespace GameAct.Skill
 {
@@ -182,9 +183,13 @@ namespace GameAct.Skill
 
             if (fireMelee)
             {
+                bool autoFaced = false;
+                float faceYawDeg = 0f;
                 // 范围内自动索敌最近 → 改 CasterForward + 身体转向
                 if (TryAutoTarget(pos, AutoTargetRange, out var aimDir, out var targetId, out var targetPos))
                 {
+                    autoFaced = true;
+                    faceYawDeg = Mathf.Atan2(aimDir.x, aimDir.z) * Mathf.Rad2Deg;
                     fwd = aimDir;
                     ctx.CasterForward = fwd;
                     ctx.TargetPosition = targetPos;
@@ -204,6 +209,8 @@ namespace GameAct.Skill
                 if (_caster.TryCast(1, ctx))
                 {
                     _playerView.TriggerAttack();
+                    // 随输入同步给 Host → ActPlayer.AttackCount → 所有端的远程 PlayerView 播出拳
+                    LocalActionInput.NotifyMelee(autoFaced, faceYawDeg);
                     CaptureGizmo(1, pos, fwd, _defMelee);
                 }
             }

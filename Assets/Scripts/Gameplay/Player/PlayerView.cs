@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using GameAct.Gameplay.Character;
 using GameAct.Spatial;
@@ -18,6 +19,15 @@ namespace GameAct.Gameplay.Player
         Animator _anim;
         bool _wasGrounded = true;
         bool _isJumping;
+
+        // 远程动作事件：对比计数变化触发（首次只采纳，不回放历史）
+        byte _jumpSeen;
+        byte _attackSeen;
+        bool _eventsInited;
+
+        // Animator.parameters 每次访问都会分配数组，缓存一次
+        readonly Dictionary<int, AnimatorControllerParameterType> _paramCache =
+            new Dictionary<int, AnimatorControllerParameterType>(8);
 
         const float WalkSpeedRef = 5.5f;
         const float SprintSpeedRef = 8.5f;
@@ -61,7 +71,9 @@ namespace GameAct.Gameplay.Player
             if (existing != null)
                 Destroy(existing);
 
+            _eventsInited = false;
             _anim = GetComponentInChildren<Animator>();
+            CacheAnimatorParams();
             if (_anim == null)
             {
                 Debug.LogWarning($"[PlayerView] {name} 上未找到 Animator（检查 Prefab 子节点 Model）");
@@ -84,6 +96,40 @@ namespace GameAct.Gameplay.Player
         }
 
         public void EnableController() { }
+
+        /// <summary>
+        /// 远程玩家动作事件同步：权威端 ActPlayer 的 JumpCount / AttackCount 变化 → 播一次 Jump / Attack。
+        /// 每帧调用（先于 ApplyPose）；首次调用只记录基线。
+        /// </summary>
+        public void SyncEvents(byte jumpCount, byte attackCount)
+        {
+            if (!_eventsInited)
+            {
+                _jumpSeen = jumpCount;
+                _attackSeen = attackCount;
+                _eventsInited = true;
+                return;
+            }
+
+            if (jumpCount != _jumpSeen)
+            {
+                _jumpSeen = jumpCount;
+                TriggerJump();
+            }
+            if (attackCount != _attackSeen)
+            {
+                _attackSeen = attackCount;
+                TriggerAttack();
+            }
+        }
+
+        void CacheAnimatorParams()
+        {
+            _paramCache.Clear();
+            if (_anim == null || _anim.runtimeAnimatorController == null) return;
+            foreach (var p in _anim.parameters)
+                _paramCache[p.nameHash] = p.type;
+        }
 
         /// <summary>
         /// 应用位姿并驱动 PlayerLoco_P2：Movement / IsGrounded / IsJumping。
@@ -172,12 +218,9 @@ namespace GameAct.Gameplay.Player
         {
             if (_anim == null || _anim.runtimeAnimatorController == null)
                 return false;
-            foreach (var p in _anim.parameters)
-            {
-                if (p.nameHash != hash) continue;
-                if (type == null || p.type == type) return true;
-            }
-            return false;
+            if (!_paramCache.TryGetValue(hash, out var t))
+                return false;
+            return type == null || t == type.Value;
         }
     }
 }

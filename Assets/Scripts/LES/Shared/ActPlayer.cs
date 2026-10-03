@@ -25,6 +25,8 @@ namespace GameAct.Les.Shared
         const float TurnSpeed = 720f;
         /// <summary>平A 索敌转向角速度（度/秒），略快一点手感更跟手。</summary>
         const float FaceTurnSpeed = 900f;
+        /// <summary>出拳索敌后身体强制朝向目标的保持时间（秒），与 PlayerCombatDriver.FaceHoldSeconds 默认值一致。</summary>
+        const float AttackFaceHold = 0.4f;
 
         [SyncVarFlags(SyncFlags.Interpolated | SyncFlags.LagCompensated)]
         SyncVar<Vector3> _position;
@@ -33,10 +35,34 @@ namespace GameAct.Les.Shared
         [SyncVarFlags(SyncFlags.Interpolated)]
         SyncVar<float> _yaw;
 
+        // ─── 远程表现同步 ───────────────────────────────────────────────
+        // 非权威端的远程 ActPlayer 不跑 Update，_velocity / _grounded 永远是初值，
+        // 远程 PlayerView 因此不播走/跑/跳/出拳。这些值由权威端写、全员读。
+        /// <summary>水平速度（动画 Movement 混合用）。</summary>
+        SyncVar<float> _animSpeedXZ;
+        /// <summary>竖直速度（动画 IsJumping 判定用，贴地时为 0）。</summary>
+        SyncVar<float> _animVelY;
+        SyncVar<bool> _animGrounded;
+        /// <summary>起跳计数（每次起跳 +1，溢出回绕），View 监听变化播一次 Jump。</summary>
+        SyncVar<byte> _jumpCount;
+        /// <summary>出拳计数（每次平A +1，溢出回绕），View 监听变化播一次 Attack。</summary>
+        SyncVar<byte> _attackCount;
+
+        // ─── 预测状态（必须是 SyncVar，才会参与 LES 回滚）────────────────
+        // 普通字段不会被回滚：Client 收到快照回滚到服务器状态后重放输入时，
+        // 若 _velocity.y / _grounded 还是「预测到未来」的旧值，就会出现：
+        //   起跳被重放成二段跳 / 刚跳起来就被 Snap 拽回地面（跳一半贴地）。
+        SyncVar<float> _simVelY;
+        SyncVar<bool> _simGrounded;
+
         Vector3 _velocity;
         bool _grounded = true;
         bool _driveLocally;
         ActPlayerInput _cmd;
+
+        // 出拳序号（权威端/预测端各自对比 _cmd.AttackSeq 的变化）
+        byte _lastAttackSeq;
+        bool _attackSeqInited;
 
         /// <summary>本 tick 是否刚起跳（表现层可消费一次）。</summary>
         bool _jumpedThisTick;
@@ -60,6 +86,18 @@ namespace GameAct.Les.Shared
         /// </summary>
         public bool RenderNeedsSmoothing => !EntityManager.IsClient;
         public Vector3 Velocity => _velocity;
+
+        /// <summary>全端可读：水平速度（远程 PlayerView 驱动 Movement）。</summary>
+        public float AnimSpeedXZ => _animSpeedXZ.Value;
+        /// <summary>全端可读：竖直速度。</summary>
+        public float AnimVelY => _animVelY.Value;
+        /// <summary>全端可读：是否贴地。</summary>
+        public bool AnimGrounded => _animGrounded.Value;
+        /// <summary>全端可读：起跳计数。</summary>
+        public byte JumpCount => _jumpCount.Value;
+        /// <summary>全端可读：出拳计数。</summary>
+        public byte AttackCount => _attackCount.Value;
+
         public bool DriveLocally => _driveLocally;
         /// <summary>是否贴地（供表现层驱动 IsGrounded）。</summary>
         public bool Grounded => _grounded;
@@ -89,8 +127,14 @@ namespace GameAct.Les.Shared
             _lookYaw = 0f;
             _velocity = Vector3.zero;
             _grounded = true;
+            _simVelY.Value = 0f;
+            _simGrounded.Value = true;
             _faceHoldLeft = 0f;
             _jumpedThisTick = false;
+            _animSpeedXZ.Value = 0f;
+            _animVelY.Value = 0f;
+            _animGrounded.Value = true;
+            _attackSeqInited = false;
         }
 
         public void SetDriveLocally(bool on) => _driveLocally = on;
@@ -123,8 +167,32 @@ namespace GameAct.Les.Shared
         {
             if (dt <= 0f) return;
 
+            // 从（可能刚被回滚过的）SyncVar 载入纵向状态
+            _velocity.y = _simVelY.Value;
+            _grounded = _simGrounded.Value;
+
             // 视线 Yaw = LocalLookInput（用于相对移动 + 本地相机）
             _lookYaw = _cmd.Rotation;
+
+            // 出拳：序号变化 = 新的一拳。首帧只采纳序号（防止残留序号误触发）。
+            if (!_attackSeqInited)
+            {
+                _lastAttackSeq = _cmd.AttackSeq;
+                _attackSeqInited = true;
+            }
+            else if (unchecked((sbyte)(_cmd.AttackSeq - _lastAttackSeq)) > 0)
+            {
+                // 只认「向前」的序号：回滚重放的历史输入序号 <= 已处理序号，直接忽略
+                _lastAttackSeq = _cmd.AttackSeq;
+                if (_cmd.AttackFace)
+                {
+                    float r = _cmd.AttackYaw * Mathf.Deg2Rad;
+                    RequestFaceDirection(new Vector3(Mathf.Sin(r), 0f, Mathf.Cos(r)), AttackFaceHold);
+                }
+                // 只有权威端写计数，Client 的预测副本不写（由快照覆盖）
+                if (!EntityManager.IsClient)
+                    unchecked { _attackCount.Value = (byte)(_attackCount.Value + 1); }
+            }
 
             // 本地输入 → 相对视线的世界速度
             var move = new Vector2(_cmd.MoveX, _cmd.MoveY);
@@ -160,6 +228,8 @@ namespace GameAct.Les.Shared
                 _velocity.y = JumpSpeed;
                 _grounded = false;
                 _jumpedThisTick = true;
+                if (!EntityManager.IsClient)
+                    unchecked { _jumpCount.Value = (byte)(_jumpCount.Value + 1); }
             }
 
             _velocity.y += Gravity * dt;
@@ -174,6 +244,17 @@ namespace GameAct.Les.Shared
             pos = WorldMotor.SnapToGround(pos, ref velY, ref _grounded, WorldMotor.EnvironmentMask);
             _velocity.y = velY;
             _position.Value = pos;
+            _simVelY.Value = velY;
+            _simGrounded.Value = _grounded;
+
+            // 同步给远程表现（权威端写；量化 + 贴地归零，避免每 tick 无意义脏数据）
+            if (!EntityManager.IsClient)
+            {
+                float spd = Mathf.Sqrt(_velocity.x * _velocity.x + _velocity.z * _velocity.z);
+                _animSpeedXZ.Value = Mathf.Round(spd * 10f) / 10f;
+                _animGrounded.Value = _grounded;
+                _animVelY.Value = _grounded ? 0f : Mathf.Round(_velocity.y * 10f) / 10f;
+            }
         }
 
         /// <summary>
@@ -194,10 +275,14 @@ namespace GameAct.Les.Shared
             bool sprint = GameInput.SprintHeld;
             bool jump = LocalLookInput.ConsumeJump() || GameInput.JumpPressed;
 
+            ActPlayerInput cmd;
             if (!LocalLookInput.CursorLocked)
-                return ActPlayerInput.FromAxes(0f, 0f, LocalLookInput.Yaw, false, false);
+                cmd = ActPlayerInput.FromAxes(0f, 0f, LocalLookInput.Yaw, false, false);
+            else
+                cmd = ActPlayerInput.FromAxes(x, y, LocalLookInput.Yaw, sprint, jump);
 
-            return ActPlayerInput.FromAxes(x, y, LocalLookInput.Yaw, sprint, jump);
+            LocalActionInput.Stamp(ref cmd);
+            return cmd;
         }
     }
 }
