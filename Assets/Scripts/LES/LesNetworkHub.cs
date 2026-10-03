@@ -74,6 +74,16 @@ namespace GameAct.Les
         string _userName = "Player";
         bool _enemiesSpawned;
 
+        // ─── 心跳 / 退房检测 ───────────────────────────────
+        // 编辑器 Stop 时进程还活着：LiteNet 线程 / Steam 连接不会自己断，Host 永远等不到断线回调。
+        // 所以除了「退出时主动断开」，再加应用层心跳兜底（崩溃 / 卡死 / 钩子没触发都能清掉）。
+        const float HeartbeatInterval = 1f;
+        const float HeartbeatTimeout = 8f;
+        float _lastHeartbeatSent;
+        readonly Dictionary<AbstractNetPeer, float> _lastRecvTime = new Dictionary<AbstractNetPeer, float>();
+        readonly List<AbstractNetPeer> _timeoutBuf = new List<AbstractNetPeer>(4);
+        static LesNetworkHub _active;
+
         // 怪物 View 清理用（每帧复用，避免分配）
         readonly HashSet<ushort> _aliveMonsterIds = new HashSet<ushort>();
         // Host：远程玩家 peer → Pawn。退房（断线）时据此销毁角色，并防止重复 Join 刷出第二个角色。
@@ -96,6 +106,7 @@ namespace GameAct.Les
         {
             Disconnect();
             _activeTransport = transport;
+            _active = this;
 
             var typesMap = LesTypesMapFactory.Create();
             TypesHash = typesMap.EvaluateEntityClassDataHash();
@@ -120,6 +131,7 @@ namespace GameAct.Les
         {
             Disconnect();
             _activeTransport = transport;
+            _active = this;
 
             if (transport == NetTransportKind.SteamP2P)
             {
@@ -144,16 +156,57 @@ namespace GameAct.Les
 
         public void Disconnect() => DisconnectInternal(softSteam: false);
 
+        // ─── 退出时主动断开 ─────────────────────────────────
+        // 编辑器点 Stop：ExitingPlayMode 时 Steam / LiteNet 都还活着，此时优雅断开（会通知 Host），
+        // 比 OnDestroy / 域卸载时再清理安全得多（那时 Steam pipe 往往已坏）。
+        // 断开时不触发 OnDisconnected（订阅者此时可能已在拆场景）。
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void HookAppQuit()
+        {
+            _active = null;
+            Application.quitting -= OnAppQuitting;
+            Application.quitting += OnAppQuitting;
+        }
+
+        static void OnAppQuitting() => DisconnectActiveSilently("quitting");
+
+        static void DisconnectActiveSilently(string why)
+        {
+            var hub = _active;
+            _active = null;
+            if (hub == null) return;
+            try { hub.DisconnectInternal(softSteam: false, silent: true); }
+            catch (Exception e) { Debug.LogWarning("[LES-Net] graceful disconnect (" + why + "): " + e.Message); }
+        }
+
+#if UNITY_EDITOR
+        [UnityEditor.InitializeOnLoadMethod]
+        static void HookEditorPlayModeExit()
+        {
+            UnityEditor.EditorApplication.playModeStateChanged -= OnEditorPlayModeChanged;
+            UnityEditor.EditorApplication.playModeStateChanged += OnEditorPlayModeChanged;
+        }
+
+        static void OnEditorPlayModeChanged(UnityEditor.PlayModeStateChange s)
+        {
+            if (s == UnityEditor.PlayModeStateChange.ExitingPlayMode)
+                DisconnectActiveSilently("ExitingPlayMode");
+        }
+#endif
+
         /// <summary>
         /// Editor Stop / 进程退出用：托管状态全清，Steam P2P 只 SoftDispose（不调 CloseConnection）。
         /// 避免 Invalid pipe handle → Native Access Violation 闪退。
         /// </summary>
         public void DisconnectSoft() => DisconnectInternal(softSteam: true);
 
-        void DisconnectInternal(bool softSteam)
+        void DisconnectInternal(bool softSteam, bool silent = false)
         {
+            if (_active == this) _active = null;
+
             // 编辑器 Stop / Domain unload：避免回调与二次 Destroy 把 Editor 打崩
-            bool quitting = softSteam || !Application.isPlaying;
+            bool quitting = softSteam || !Application.isPlaying || silent;
             _suppressDisconnectEvent = quitting;
 
             try
@@ -206,6 +259,7 @@ namespace GameAct.Les
             _packetProcessor = null;
             _enemiesSpawned = false;
             _remotePawns.Clear();
+            _lastRecvTime.Clear();
             _aliveMonsterIds.Clear();
             try { FlowFieldService.Reset(); } catch { /* ignore */ }
             _activeTransport = NetTransportKind.Udp;
@@ -269,10 +323,65 @@ namespace GameAct.Les
                     FlowFieldService.Tick(target, 1f / 30f);
             }
 
+            TickHeartbeat();
+
             ServerEm?.Update();
             ClientEm?.Update();
             SyncMonsterViews();
             SyncPlayerViews();
+        }
+
+        /// <summary>
+        /// Client：1Hz 心跳。Host：超过 HeartbeatTimeout 没收到该玩家任何包 → 视为退房，销毁角色并断开传输层。
+        /// 用 realtimeSinceStartup，不受 timeScale（暂停菜单）影响。
+        /// </summary>
+        void TickHeartbeat()
+        {
+            float now = Time.realtimeSinceStartup;
+
+            if (Role == NetRole.Client && IsConnected)
+            {
+                if (now - _lastHeartbeatSent >= HeartbeatInterval)
+                {
+                    _lastHeartbeatSent = now;
+                    SendToHost(new[] { (byte)LesPacketType.Heartbeat });
+                }
+                return;
+            }
+
+            if (Role != NetRole.Host || ServerEm == null || _remotePawns.Count == 0) return;
+
+            _timeoutBuf.Clear();
+            foreach (var kv in _remotePawns)
+            {
+                if (!_lastRecvTime.TryGetValue(kv.Key, out var last))
+                {
+                    _lastRecvTime[kv.Key] = now; // 没记录过：从现在开始计时
+                    continue;
+                }
+                if (now - last > HeartbeatTimeout)
+                    _timeoutBuf.Add(kv.Key);
+            }
+
+            for (int i = 0; i < _timeoutBuf.Count; i++)
+            {
+                var peer = _timeoutBuf[i];
+                Log($"Heartbeat timeout > {HeartbeatTimeout:F0}s → remove player {peer}");
+                RemoveRemotePlayer(peer, "heartbeat_timeout");
+                KickTransportPeer(peer);
+            }
+        }
+
+        void KickTransportPeer(AbstractNetPeer peer)
+        {
+            try
+            {
+                if (peer is GameActNetPeer gp)
+                    gp.Peer.Disconnect();
+                else if (peer is SteamP2PNetPeer sp && _steam != null)
+                    _steam.DisconnectPeer(sp.Connection);
+            }
+            catch (Exception e) { Debug.LogWarning("[LES-Net] kick peer: " + e.Message); }
         }
 
         public void Dispose() => Disconnect();
@@ -556,8 +665,13 @@ namespace GameAct.Les
             if (data == null || data.Length < 1) return;
             var packetType = (LesPacketType)data[0];
 
+            if (Role == NetRole.Host)
+                _lastRecvTime[peer] = Time.realtimeSinceStartup;
+
             switch (packetType)
             {
+                case LesPacketType.Heartbeat:
+                    break;
                 case LesPacketType.EntitySystem:
                 {
                     // 整包交给 LES（含 type 字节，与 UDP ToSpan 行为一致）
@@ -665,6 +779,7 @@ namespace GameAct.Les
             });
             ServerEm.AddController<ActPlayerController>(netPlayer, pawn);
             _remotePawns[abstractPeer] = pawn;
+            _lastRecvTime[abstractPeer] = Time.realtimeSinceStartup;
             Log($"Spawned remote ActPlayer id={pawn.Id} for {userName}");
         }
 
@@ -678,6 +793,7 @@ namespace GameAct.Les
 
             _remotePawns.TryGetValue(peer, out var pawn);
             _remotePawns.Remove(peer);
+            _lastRecvTime.Remove(peer);
 
             var em = ServerEm;
             if (em == null) return;
@@ -1190,8 +1306,14 @@ namespace GameAct.Les
             if (reader.AvailableBytes < 1) return;
             var packetType = (LesPacketType)reader.PeekByte();
 
+            if (Role == NetRole.Host && peer.Tag is AbstractNetPeer seenPeer)
+                _lastRecvTime[seenPeer] = Time.realtimeSinceStartup;
+
             switch (packetType)
             {
+                case LesPacketType.Heartbeat:
+                    reader.GetByte();
+                    break;
                 case LesPacketType.EntitySystem:
                 {
                     var span = ToSpan(reader);

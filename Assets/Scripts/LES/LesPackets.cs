@@ -9,7 +9,9 @@ namespace GameAct.Les
         /// <summary>Client → Host：对怪物造成的伤害（HP 以 Host 为准）。</summary>
         MonsterDamage = 2,
         /// <summary>Client → Host：对怪物的击退请求。</summary>
-        MonsterKnockback = 3
+        MonsterKnockback = 3,
+        /// <summary>Client → Host：心跳（1Hz）。Host 超时未收到任何包即视为退房。</summary>
+        Heartbeat = 4
     }
 
     /// <summary>客户端连接后发往 Host 的加入请求。</summary>
