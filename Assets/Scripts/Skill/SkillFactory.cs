@@ -22,6 +22,8 @@ namespace GameAct.Skill
                 case SkillExecType.ShapeArea:
                     // For now reuse melee/fan path; can specialize later
                     return new MeleeSkill(define);
+                case SkillExecType.Dash:
+                    return new DashSkill(define);
                 default:
                     return new MeleeSkill(define);
             }

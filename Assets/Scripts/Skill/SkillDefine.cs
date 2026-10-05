@@ -10,7 +10,8 @@ namespace GameAct.Skill
         Projectile,
         DelayedArea,
         PersistentZone,
-        ShapeArea
+        ShapeArea,
+        Dash
     }
 
     public enum SkillShape
@@ -197,6 +198,34 @@ namespace GameAct.Skill
                 Shape = SkillShape.Sphere,
                 Cooldown = 8f,
                 KnockbackDistance = 0f // 持续圈默认不击退
+            };
+        }
+
+        /// <summary>
+        /// 冲刺。distance / duration 决定速度；ProjectileSpeed 复用为冲刺速度。
+        /// damage=0 纯位移；>0 则冲刺途中身体判定一次。
+        /// </summary>
+        public static SkillDefine CreateDash(
+            string name = "Dash",
+            float distance = 6f,
+            float duration = 0.18f,
+            float cooldown = 1.0f,
+            float damage = 0f)
+        {
+            float speed = duration > 0.01f ? distance / duration : 30f;
+            return new SkillDefine
+            {
+                SkillId = 6,
+                Name = name,
+                ExecType = SkillExecType.Dash,
+                Range = 1.2f,
+                Duration = duration,
+                ProjectileSpeed = speed, // 复用字段 = 冲刺速度 m/s
+                BaseDamage = damage,
+                MaxTargets = 4,
+                Cooldown = cooldown,
+                KnockbackDistance = 0.8f,
+                HitDelaySec = 0.05f
             };
         }
     }

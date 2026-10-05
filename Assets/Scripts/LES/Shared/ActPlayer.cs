@@ -14,6 +14,7 @@ namespace GameAct.Les.Shared
     /// - WASD / 左摇杆相对视线方向移动（GameInput.Move）
     /// - 角色模型朝向移动方向转身（有转向速度），按 A/S/D 会转过去
     /// - 平A 索敌时 RequestFaceDirection：身体优先转向目标，持续 FaceHold 秒
+    /// - Dash：RequestDash 覆盖水平速度，走 WorldMotor.SlideMove 不穿墙
     /// </summary>
     public class ActPlayer : PawnLogic
     {
@@ -74,6 +75,11 @@ namespace GameAct.Les.Shared
         float _faceTargetYaw;
         float _faceHoldLeft;
 
+        // Dash（本地/权威驱动，WorldMotor 挡墙）
+        float _dashLeft;
+        Vector3 _dashDir;
+        float _dashSpeed;
+
         public Vector3 Position => _position.Value;
         /// <summary>身体朝向（模型）。</summary>
         public float Yaw => _yaw.Value;
@@ -101,6 +107,7 @@ namespace GameAct.Les.Shared
         public bool DriveLocally => _driveLocally;
         /// <summary>是否贴地（供表现层驱动 IsGrounded）。</summary>
         public bool Grounded => _grounded;
+        public bool IsDashing => _dashLeft > 0f;
 
         /// <summary>
         /// 消费本 tick 的起跳标记。返回 true 表示刚起跳，表现层应播一次 Jump。
@@ -135,6 +142,9 @@ namespace GameAct.Les.Shared
             _animVelY.Value = 0f;
             _animGrounded.Value = true;
             _attackSeqInited = false;
+            _dashLeft = 0f;
+            _dashDir = Vector3.zero;
+            _dashSpeed = 0f;
         }
 
         public void SetDriveLocally(bool on) => _driveLocally = on;
@@ -151,6 +161,27 @@ namespace GameAct.Les.Shared
             if (worldDir.sqrMagnitude < 1e-6f) return;
             _faceTargetYaw = Mathf.Atan2(worldDir.x, worldDir.z) * Mathf.Rad2Deg;
             _faceHoldLeft = Mathf.Max(0.05f, holdSeconds);
+        }
+
+        /// <summary>
+        /// 请求冲刺。direction 会水平归一化；duration/speed 来自 SkillDefine。
+        /// 冲刺中覆盖水平速度，走 WorldMotor.SlideMove，不穿墙。
+        /// </summary>
+        public void RequestDash(Vector3 direction, float duration, float speed)
+        {
+            direction.y = 0f;
+            if (direction.sqrMagnitude < 1e-6f)
+            {
+                float r = _yaw.Value * Mathf.Deg2Rad;
+                direction = new Vector3(Mathf.Sin(r), 0f, Mathf.Cos(r));
+            }
+            else
+                direction.Normalize();
+
+            _dashDir = direction;
+            _dashLeft = Mathf.Max(0.05f, duration);
+            _dashSpeed = Mathf.Max(1f, speed);
+            RequestFaceDirection(direction, duration + 0.05f);
         }
 
         protected override void Update()
@@ -170,6 +201,46 @@ namespace GameAct.Les.Shared
             // 从（可能刚被回滚过的）SyncVar 载入纵向状态
             _velocity.y = _simVelY.Value;
             _grounded = _simGrounded.Value;
+
+            // ── Dash 覆盖移动（优先于普通走路）──
+            if (_dashLeft > 0f)
+            {
+                _dashLeft -= dt;
+                Vector3 dashDelta = _dashDir * (_dashSpeed * dt);
+                Vector3 dashPos = _position.Value;
+                float dashVelY = _velocity.y;
+
+                if (!_grounded)
+                    dashPos.y += dashVelY * dt;
+                dashPos = WorldMotor.SlideMove(dashPos, dashDelta, WorldMotor.DefaultRadius, WorldMotor.DefaultHeight, WorldMotor.EnvironmentMask);
+                dashPos = WorldMotor.SnapToGround(dashPos, ref dashVelY, ref _grounded, WorldMotor.EnvironmentMask);
+
+                _velocity.x = _dashDir.x * _dashSpeed;
+                _velocity.z = _dashDir.z * _dashSpeed;
+                _velocity.y = dashVelY;
+                _position.Value = dashPos;
+                _simVelY.Value = dashVelY;
+                _simGrounded.Value = _grounded;
+
+                if (_faceHoldLeft > 0f)
+                {
+                    _faceHoldLeft -= dt;
+                    _yaw.Value = Mathf.MoveTowardsAngle(_yaw.Value, _faceTargetYaw, FaceTurnSpeed * dt);
+                }
+                else
+                {
+                    float dashYaw = Mathf.Atan2(_dashDir.x, _dashDir.z) * Mathf.Rad2Deg;
+                    _yaw.Value = Mathf.MoveTowardsAngle(_yaw.Value, dashYaw, FaceTurnSpeed * dt);
+                }
+
+                if (!EntityManager.IsClient)
+                {
+                    _animSpeedXZ.Value = Mathf.Round(_dashSpeed * 10f) / 10f;
+                    _animGrounded.Value = _grounded;
+                    _animVelY.Value = _grounded ? 0f : Mathf.Round(_velocity.y * 10f) / 10f;
+                }
+                return;
+            }
 
             // 视线 Yaw = LocalLookInput（用于相对移动 + 本地相机）
             _lookYaw = _cmd.Rotation;

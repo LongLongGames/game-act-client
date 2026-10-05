@@ -45,6 +45,7 @@ namespace GameAct.Skill
         SkillDefine _defProjectile;
         SkillDefine _defMeteor;
         SkillDefine _defZone;
+        SkillDefine _defDash;
 
         int _lastSkillId;
         float _gizmoShowTime;
@@ -94,6 +95,7 @@ namespace GameAct.Skill
             _defProjectile = SkillDefine.CreateProjectile("Fireball", 16f, 22f);
             _defMeteor = SkillDefine.CreateDelayedArea("Meteor", 4.5f, 1.0f, 50f);
             _defZone = SkillDefine.CreatePersistentZone("FireZone", 3.5f, 4f, 8f);
+            _defDash = SkillDefine.CreateDash("Dash", distance: 6f, duration: 0.18f, cooldown: 1.0f, damage: 0f);
 
             _caster = new SkillCaster();
             _caster.KnockbackDistance = DefaultKnockbackDistance;
@@ -102,11 +104,12 @@ namespace GameAct.Skill
             _caster.AddSkill(_defProjectile);
             _caster.AddSkill(_defMeteor);
             _caster.AddSkill(_defZone);
+            _caster.AddSkill(_defDash);
 
             if (debugDrawer != null)
                 debugDrawer.SetSpatialIndex(_spatial);
 
-            Debug.Log("[PlayerCombatDriver] systems ready (1 Melee auto-target / 2 Rail / 3 Fireball / 4 Meteor / 5 Zone) " +
+            Debug.Log("[PlayerCombatDriver] systems ready (1 Melee auto-target / 2 Rail / 3 Fireball / 4 Meteor / 5 Zone / 6 Dash) " +
                       $"AutoTargetRange={AutoTargetRange:F1}");
         }
 
@@ -241,6 +244,44 @@ namespace GameAct.Skill
                     CaptureGizmo(5, pos, fwd, _defZone);
             }
 
+            // Dash：数字键 6 / LeftShift / 手柄 LB
+            bool fireDash = false;
+            if (kb != null && (kb.digit6Key.wasPressedThisFrame || kb.leftShiftKey.wasPressedThisFrame))
+                fireDash = true;
+            var padDash = Gamepad.current;
+            if (padDash != null && padDash.leftShoulder.wasPressedThisFrame)
+                fireDash = true;
+
+            if (fireDash)
+            {
+                Vector3 dashDir = fwd;
+                Vector2 mv = GameInput.Move;
+                if (mv.sqrMagnitude > 0.01f)
+                {
+                    var cam = Camera.main;
+                    if (cam != null)
+                    {
+                        Vector3 cf = cam.transform.forward; cf.y = 0f; cf.Normalize();
+                        Vector3 cr = cam.transform.right;   cr.y = 0f; cr.Normalize();
+                        dashDir = (cf * mv.y + cr * mv.x);
+                        if (dashDir.sqrMagnitude > 1e-6f)
+                            dashDir.Normalize();
+                        else
+                            dashDir = fwd;
+                    }
+                }
+
+                ctx.CasterForward = dashDir;
+                ctx.KnockbackDistance = _caster.ResolveKnockback(_defDash);
+                if (_caster.TryCast(6, ctx))
+                {
+                    float dur = _defDash.Duration > 0f ? _defDash.Duration : 0.18f;
+                    float spd = _defDash.ProjectileSpeed > 0f ? _defDash.ProjectileSpeed : 30f;
+                    _pawn?.RequestDash(dashDir, dur, spd);
+                    CaptureGizmo(6, pos, dashDir, _defDash);
+                }
+            }
+
             /* ---- 旧硬编码 ----
             var mouse = Mouse.current;
             bool fireMeleeOld = (kb != null && kb.digit1Key.wasPressedThisFrame)
@@ -301,6 +342,10 @@ namespace GameAct.Skill
                     _gizmoRadius = def.Range;
                     _gizmoTarget = origin + _gizmoForward * Mathf.Clamp(def.Range * 1.2f, 4f, 14f);
                     _gizmoTarget.y = origin.y;
+                    break;
+                case SkillExecType.Dash:
+                    _gizmoRadius = 0.4f;
+                    _gizmoTarget = origin + _gizmoForward * 6f;
                     break;
                 default:
                     _gizmoRadius = def.Range;
@@ -392,6 +437,11 @@ namespace GameAct.Skill
                     DrawWireCircle(_gizmoTarget, _gizmoRadius);
                     Gizmos.color = new Color(1f, 0.35f, 0.05f, 0.2f);
                     Gizmos.DrawSphere(_gizmoTarget + Vector3.up * 0.05f, _gizmoRadius);
+                    break;
+                case 6:
+                    Gizmos.color = new Color(0.2f, 1f, 1f, 0.95f);
+                    Gizmos.DrawLine(_gizmoOrigin + Vector3.up * 1.0f, _gizmoTarget + Vector3.up * 1.0f);
+                    Gizmos.DrawWireSphere(_gizmoTarget + Vector3.up * 1.0f, 0.35f);
                     break;
             }
         }
