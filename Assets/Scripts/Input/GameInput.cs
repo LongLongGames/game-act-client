@@ -88,19 +88,48 @@ namespace GameAct.Input
         public static bool JumpHeld =>
             _actions != null && _playerEnabled && _actions.Player.Jump.IsPressed();
 
-        /// <summary>asset 里 action 名是 Sprine（拼写如此）。</summary>
+        // ── 走/跑切换（原神式：Ctrl 切换，默认跑步）────────────────
+        // Shift 已留给 Dash，不再按住冲刺。
+        static bool _runMode = true; // true=跑，false=走
+        static bool _ctrlWasDown;
+
+        /// <summary>
+        /// 是否处于跑步模式（移动时用 SprintSpeed）。
+        /// Ctrl 切换走/跑；默认跑步。Shift 不参与（留给 Dash）。
+        /// </summary>
         public static bool SprintHeld
         {
             get
             {
-                if (_actions != null && _playerEnabled && _actions.Player.Sprine.IsPressed())
-                    return true;
-                // inputed 暂无手柄 Sprint 绑定：兜底 LB / L3
-                var pad = Gamepad.current;
-                if (pad != null && (pad.leftShoulder.isPressed || pad.leftStickButton.isPressed))
-                    return true;
-                return false;
+                // 每帧读一次切换（Update/逻辑 tick 都会调到这里）
+                PollWalkRunToggle();
+                return _runMode;
             }
+        }
+
+        /// <summary>当前是否跑步模式（只读，不触发轮询副作用以外的逻辑）。</summary>
+        public static bool IsRunMode => _runMode;
+
+        /// <summary>强制设置走/跑（UI 或外部系统可用）。</summary>
+        public static void SetRunMode(bool run) => _runMode = run;
+
+        static void PollWalkRunToggle()
+        {
+            if (!_playerEnabled) return;
+
+            bool ctrlDown = false;
+            var kb = Keyboard.current;
+            if (kb != null && (kb.leftCtrlKey.isPressed || kb.rightCtrlKey.isPressed))
+                ctrlDown = true;
+
+            // 手柄：L3 点击切换走/跑（LB 已给 Dash）
+            var pad = Gamepad.current;
+            bool stickClick = pad != null && pad.leftStickButton.wasPressedThisFrame;
+
+            if ((ctrlDown && !_ctrlWasDown) || stickClick)
+                _runMode = !_runMode;
+
+            _ctrlWasDown = ctrlDown;
         }
 
         public static bool AttackPressed =>
